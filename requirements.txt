@@ -1,9 +1,9 @@
-gym==0.21.0
+gym
 numpy
-open3d==0.17.0
-stable-baselines3==1.7.0
-torch==2.0.0
-torchvision==0.15.1
+open3d
+stable-baselines3
+torch
+torchvision
 matplotlib
 scipy
 tensorboard
