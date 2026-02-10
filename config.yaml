@@ -1,0 +1,58 @@
+# ============================================================
+# COMPLETE TRAINING CONFIG
+# ============================================================
+
+# Environment
+environment:
+  data_path: ./data/train
+  verify_data_path: ./data/verify
+  test_data_path: ./data/test
+  view_num: 33
+  observation_space_dim: 1024
+  step_size: 10
+  is_vec_env: 0
+  env_num: 8
+  is_ratio_reward: 1
+
+# DQN Hyperparameters
+dqn:
+  device: cuda:0
+  learning_rate: 0.001
+  batch_size: 128
+  buffer_size: 100000
+  learning_starts: 3000
+  exploration_fraction: 0.5
+  exploration_final_eps: 0.2
+  gradient_steps: 1
+  train_freq: 16
+  gamma: 0.1
+  total_steps: 500000
+
+# Pretrained PointNet
+pretrained:
+  is_transform: 1
+  pretrained_model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
+  is_freeze_fe: 0
+
+# Replay Buffer
+replay_buffer:
+  is_load_replay_buffer: 1
+  replay_buffer_path: ideal_policy_d1024_s10_1e_nra_3997
+  is_save_replay_buffer: 0
+
+# Saving & Output
+output:
+  output_file: train_result.txt
+  checkpoint_path: checkpoints/rl_nbv
+  is_save_model: 1
+
+# Training Mode
+training:
+  is_profile: 0
+  resume: 1
+
+# Logging
+logging:
+  log_file: train_detail.log
+  coverage_log_freq_normal: 50000
+  coverage_log_freq_profile: 200

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C++ Extensions (compiled objects)
+*.so
+build/
+dist/
+*.egg-info/
+
+# Data and Checkpoints
+data/
+checkpoints/
+dqn_replay_buffer.pkl
+dqn_replay_buffer
+
+# Logs and Results
+*.log
+train_result.txt
+profile_result.txt
+runs/
+log/
+
+# Colab / Jupyter
+.ipynb_checkpoints/
+
+# IDEs
+.vscode/
+.idea/
