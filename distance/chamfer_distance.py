@@ -1,10 +1,9 @@
 import torch
 import torch.nn as nn
+from torch.utils.cpp_extension import load
 
-    from torch.utils.cpp_extension import load
 
-
-    cd = load(name="cd",
+cd = load(name="cd",
               sources=["distance/chamfer_distance.cpp",
                        "distance/chamfer_distance.cu"])
 
