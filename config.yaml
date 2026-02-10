@@ -32,7 +32,7 @@ dqn:
 pretrained:
   is_transform: 1
   pretrained_model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
-  is_freeze_fe: 0
+  is_freeze_fe: 1
 
 # Replay Buffer
 replay_buffer:
@@ -48,7 +48,7 @@ output:
 
 # Training Mode
 training:
-  is_profile: 0
+  is_profile: 1
   resume: 1
 
 # Logging
