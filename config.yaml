@@ -38,7 +38,7 @@ pretrained:
 replay_buffer:
   is_load_replay_buffer: 1
   replay_buffer_path: ideal_policy_d1024_s10_1e_nra_3997
-  is_save_replay_buffer: 0
+  is_save_replay_buffer: 1
 
 # Saving & Output
 output:
