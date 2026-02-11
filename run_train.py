@@ -57,6 +57,8 @@ def config_to_args(config):
         # Output
         'output_file'            : out.get('output_file', 'train_result.txt'),
         'checkpoint_path'        : out.get('checkpoint_path', 'checkpoints/rl_nbv'),
+        'save_freq'              : out.get('save_freq', 10000),
+        'eval_freq'              : out.get('eval_freq', 10000),
         'is_save_model'          : out.get('is_save_model', 1),
 
         # Training
@@ -82,7 +84,7 @@ def print_summary(args_dict):
         "Pretrained"   : ["is_transform", "pretrained_model_path", "is_freeze_fe"],
         "Replay Buffer": ["is_load_replay_buffer", "replay_buffer_path",
                           "is_save_replay_buffer"],
-        "Output"       : ["output_file", "checkpoint_path", "is_save_model"],
+        "Output"       : ["output_file", "checkpoint_path", "save_freq", "eval_freq", "is_save_model"],
         "Training"     : ["is_profile", "resume"],
         "Logging"      : ["log_file"],
     }

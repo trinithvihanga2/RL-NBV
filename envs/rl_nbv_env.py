@@ -14,7 +14,6 @@ import logging
 
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
-
 def resample_pcd(pcd, n, logger, name):
     """Drop or duplicate points so that pcd has exactly n points"""
     if pcd.shape[0] == 0:

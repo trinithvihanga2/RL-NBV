@@ -44,6 +44,8 @@ replay_buffer:
 output:
   output_file: train_result.txt
   checkpoint_path: checkpoints/rl_nbv
+  save_freq: 10000
+  eval_freq: 10000
   is_save_model: 1
 
 # Training Mode
