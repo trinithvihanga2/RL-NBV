@@ -1,13 +1,6 @@
 import os
-import gym
 import numpy as np
-import matplotlib.pyplot as plt
-from stable_baselines3.common import results_plotter
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.results_plotter import load_results, ts2xy, plot_results
-from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.type_aliases import TrainFreq, TrainFrequencyUnit
 
 
 class NextBestViewCustomCallback(BaseCallback):
@@ -43,16 +36,12 @@ class NextBestViewCustomCallback(BaseCallback):
             os.makedirs(self.save_path, exist_ok=True)
         if not self.check_replay_buffer:
             return
-        experience = self.model.replay_buffer.sample(
-            32, env=self.model._vec_normalize_env
-        )
+        self.model.replay_buffer.sample(32, env=self.model._vec_normalize_env)
 
     def _on_rollout_end(self) -> None:
         if not self.check_replay_buffer:
             return
-        experience = self.model.replay_buffer.sample(
-            32, env=self.model._vec_normalize_env
-        )
+        self.model.replay_buffer.sample(32, env=self.model._vec_normalize_env)
 
     def _on_step(self) -> bool:
         # 1. Periodic Checkpoint
