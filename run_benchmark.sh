@@ -1,3 +1,4 @@
+#!/bin/bash
 rm -rf benchmark.log
 rm -rf env.log
 rm -rf average_coverage.txt

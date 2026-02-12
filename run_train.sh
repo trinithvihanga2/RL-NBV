@@ -1,3 +1,4 @@
+#!/bin/bash
 rm -rf env_*log
 rm -rf model_detail.log
 python train.py --data_path /home/wang/data/rl_nbv/output/train\

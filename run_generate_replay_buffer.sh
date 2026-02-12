@@ -1,3 +1,4 @@
+#!/bin/bash
 rm -rf env_*.log
 python generate_replay_buffer.py --data_path /home/wang/data/rl_nbv/output/train\
                                  --view_num 33\

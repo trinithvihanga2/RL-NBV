@@ -1,1 +1,2 @@
+#!/bin/bash
 python check_render_rlt.py --data_path /home/wang/data/test/output
