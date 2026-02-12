@@ -249,6 +249,8 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_path',         type=str,   default="checkpoints/rl_nbv")
     parser.add_argument('--is_save_model',           type=int,   default=0)
     parser.add_argument('--is_save_replay_buffer',   type=int,   default=0)
+    parser.add_argument('--save_freq',               type=int,   default=10000, help='Frequency to save periodic checkpoints')
+    parser.add_argument('--eval_freq',               type=int,   default=10000, help='Frequency to evaluate and save best model')
 
     # Pretrained
     parser.add_argument('--is_transform',            type=int,   default=0)
@@ -282,10 +284,10 @@ if __name__ == '__main__':
     log_gpu_memory(logger, tag="[startup]")
 
     # ── Training config ───────────────────────────────────────────────────────
-    coverage_log_freq = 50000 if args.is_profile == 0 else 200
+    coverage_log_freq = args.eval_freq if args.is_profile == 0 else 200
     total_steps       = args.total_steps if args.is_profile == 0 else 2000
     logger.info("Total steps       : {}".format(total_steps))
-    logger.info("Coverage log freq : {}".format(coverage_log_freq))
+    logger.info("Coverage log freq (eval) : {}".format(coverage_log_freq))
 
     # ── Environments ──────────────────────────────────────────────────────────
     logger.info("Building environments...")
@@ -377,7 +379,10 @@ if __name__ == '__main__':
         args.output_file,
         verify_env,
         test_env,
-        check_freq=coverage_log_freq
+        check_freq=coverage_log_freq,
+        best_model_path=os.path.join(args.checkpoint_path, "best_model_coverage"),
+        save_freq=args.save_freq,
+        save_path=args.checkpoint_path
     )
 
     # ── Training ──────────────────────────────────────────────────────────────
