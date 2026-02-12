@@ -28,7 +28,7 @@ def setup_logger(log_file="train_detail.log"):
     logger = logging.getLogger("train")
     logger.setLevel(logging.DEBUG)
     log_format = logging.Formatter(
-        '[%(asctime)s] [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S'
+        "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
     )
     file_handle = logging.FileHandler(log_file)
     file_handle.setFormatter(log_format)
@@ -47,12 +47,12 @@ def setup_logger(log_file="train_detail.log"):
 # GPU MEMORY
 # ============================================================================
 def setup_gpu(device_str, logger):
-    cudnn.benchmark     = True
+    cudnn.benchmark = True
     cudnn.deterministic = False
     if torch.cuda.is_available():
         device_id = int(device_str.split(":")[-1]) if ":" in device_str else 0
         torch.cuda.set_device(device_id)
-        gpu_name  = torch.cuda.get_device_name(device_id)
+        gpu_name = torch.cuda.get_device_name(device_id)
         total_mem = torch.cuda.get_device_properties(device_id).total_memory / 1024**3
         logger.info("GPU        : {}".format(gpu_name))
         logger.info("Total VRAM : {:.2f} GB".format(total_mem))
@@ -69,13 +69,15 @@ def clear_gpu_memory(logger):
 
 def log_gpu_memory(logger, tag=""):
     if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated()  / 1024**3
-        reserved  = torch.cuda.memory_reserved()   / 1024**3
-        total     = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        free      = total - reserved
-        logger.info("GPU Memory {} | Allocated: {:.2f}GB | Reserved: {:.2f}GB | Free: {:.2f}GB".format(
-            tag, allocated, reserved, free
-        ))
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        free = total - reserved
+        logger.info(
+            "GPU Memory {} | Allocated: {:.2f}GB | Reserved: {:.2f}GB | Free: {:.2f}GB".format(
+                tag, allocated, reserved, free
+            )
+        )
 
 
 # ============================================================================
@@ -103,9 +105,12 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
             f.write("[{}]:{:.2f} ".format(i + 1, average_coverage[i]))
         f.write("\n")
 
-    logger.info("Average coverage: " + " ".join(
-        "[{}]:{:.2f}".format(i + 1, average_coverage[i]) for i in range(step_size)
-    ))
+    logger.info(
+        "Average coverage: "
+        + " ".join(
+            "[{}]:{:.2f}".format(i + 1, average_coverage[i]) for i in range(step_size)
+        )
+    )
     return average_coverage
 
 
@@ -115,9 +120,11 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
 def save_checkpoint(model, checkpoint_path, logger, timestep=None):
     os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
     model.save(checkpoint_path)
-    logger.info("✅ Checkpoint saved: {} (timestep={})".format(
-        checkpoint_path, timestep or "unknown"
-    ))
+    logger.info(
+        "✅ Checkpoint saved: {} (timestep={})".format(
+            checkpoint_path, timestep or "unknown"
+        )
+    )
 
 
 def load_checkpoint(checkpoint_path, train_env, policy_kwargs, logger):
@@ -128,7 +135,7 @@ def load_checkpoint(checkpoint_path, train_env, policy_kwargs, logger):
         path=checkpoint_path,
         env=train_env,
         policy_kwargs=policy_kwargs,
-        policy="MultiInputPolicy"
+        policy="MultiInputPolicy",
     )
     logger.info("✅ Resumed from checkpoint: {}".format(checkpoint_path))
     return model
@@ -145,9 +152,10 @@ def make_env(data_path, env_id, args):
             observation_space_dim=args.observation_space_dim,
             env_id=env_id,
             log_level=logging.INFO,
-            is_ratio_reward=(args.is_ratio_reward == 1)
+            is_ratio_reward=(args.is_ratio_reward == 1),
         )
         return env
+
     return _f
 
 
@@ -159,6 +167,7 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
         if progress_remaining > 0.05:
             return progress_remaining * initial_value
         return 0.05 * initial_value
+
     return func
 
 
@@ -167,15 +176,17 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
 # ============================================================================
 def transfer_pretrained_weights(model, args, logger):
     if not os.path.exists(args.pretrained_model_path):
-        logger.error("Pretrained model not found: {}".format(args.pretrained_model_path))
+        logger.error(
+            "Pretrained model not found: {}".format(args.pretrained_model_path)
+        )
         return model
 
-    checkpoint        = torch.load(args.pretrained_model_path)
-    pretrained_dict   = checkpoint["model_state_dict"]
-    qnet_dict         = model.policy.q_net.state_dict()
-    update_dict       = copy.deepcopy(qnet_dict)
-    updated_keys      = []
-    missing_keys      = []
+    checkpoint = torch.load(args.pretrained_model_path)
+    pretrained_dict = checkpoint["model_state_dict"]
+    qnet_dict = model.policy.q_net.state_dict()
+    update_dict = copy.deepcopy(qnet_dict)
+    updated_keys = []
+    missing_keys = []
 
     for key in sorted(pretrained_dict.keys()):
         if key in ("fc3.bias", "fc3.weight"):
@@ -192,9 +203,11 @@ def transfer_pretrained_weights(model, args, logger):
     model.q_net.load_state_dict(update_dict)
     model.q_net_target.load_state_dict(update_dict)
 
-    logger.info("Pretrained weights loaded. Updated: {}, Missing: {}".format(
-        len(updated_keys), len(missing_keys)
-    ))
+    logger.info(
+        "Pretrained weights loaded. Updated: {}, Missing: {}".format(
+            len(updated_keys), len(missing_keys)
+        )
+    )
     if missing_keys:
         logger.warning("Missing keys: {}".format(missing_keys))
     return model
@@ -204,11 +217,17 @@ def transfer_pretrained_weights(model, args, logger):
 # FREEZE FEATURE EXTRACTOR
 # ============================================================================
 def freeze_feature_extractor(model, logger):
-    for net in [model.policy.q_net, model.policy.q_net_target,
-                model.q_net, model.q_net_target]:
-        for layer in [net.features_extractor.sa1,
-                      net.features_extractor.sa2,
-                      net.features_extractor.sa3]:
+    for net in [
+        model.policy.q_net,
+        model.policy.q_net_target,
+        model.q_net,
+        model.q_net_target,
+    ]:
+        for layer in [
+            net.features_extractor.sa1,
+            net.features_extractor.sa2,
+            net.features_extractor.sa3,
+        ]:
             for param in layer.parameters():
                 param.requires_grad = False
     logger.info("Feature extractor frozen (sa1, sa2, sa3)")
@@ -217,56 +236,66 @@ def freeze_feature_extractor(model, logger):
 # ============================================================================
 # MAIN
 # ============================================================================
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # Environment
-    parser.add_argument('--data_path',               type=str,   required=True)
-    parser.add_argument('--view_num',                type=int,   required=True)
-    parser.add_argument('--verify_data_path',        type=str,   required=True)
-    parser.add_argument('--test_data_path',          type=str,   required=True)
-    parser.add_argument('--observation_space_dim',   type=int,   required=True)
-    parser.add_argument('--step_size',               type=int,   required=True)
-    parser.add_argument('--is_vec_env',              type=int,   default=0)
-    parser.add_argument('--env_num',                 type=int,   default=8)
-    parser.add_argument('--is_ratio_reward',         type=int,   default=1)
+    parser.add_argument("--data_path", type=str, required=True)
+    parser.add_argument("--view_num", type=int, required=True)
+    parser.add_argument("--verify_data_path", type=str, required=True)
+    parser.add_argument("--test_data_path", type=str, required=True)
+    parser.add_argument("--observation_space_dim", type=int, required=True)
+    parser.add_argument("--step_size", type=int, required=True)
+    parser.add_argument("--is_vec_env", type=int, default=0)
+    parser.add_argument("--env_num", type=int, default=8)
+    parser.add_argument("--is_ratio_reward", type=int, default=1)
 
     # DQN - ✅ ALL FROM CONFIG NOW
-    parser.add_argument('--device',                  type=str,   default='cuda:0')
-    parser.add_argument('--learning_rate',           type=float, default=0.001)
-    parser.add_argument('--batch_size',              type=int,   default=128)
-    parser.add_argument('--buffer_size',             type=int,   default=100000)
-    parser.add_argument('--learning_starts',         type=int,   default=3000)
-    parser.add_argument('--exploration_fraction',    type=float, default=0.5)
-    parser.add_argument('--exploration_final_eps',   type=float, default=0.2)
-    parser.add_argument('--gradient_steps',          type=int,   default=1)
-    parser.add_argument('--train_freq',              type=int,   default=16)
-    parser.add_argument('--gamma',                   type=float, default=0.1)
-    parser.add_argument('--total_steps',             type=int,   default=500000)
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--buffer_size", type=int, default=100000)
+    parser.add_argument("--learning_starts", type=int, default=3000)
+    parser.add_argument("--exploration_fraction", type=float, default=0.5)
+    parser.add_argument("--exploration_final_eps", type=float, default=0.2)
+    parser.add_argument("--gradient_steps", type=int, default=1)
+    parser.add_argument("--train_freq", type=int, default=16)
+    parser.add_argument("--gamma", type=float, default=0.1)
+    parser.add_argument("--total_steps", type=int, default=500000)
 
     # Output
-    parser.add_argument('--output_file',             type=str,   required=True)
-    parser.add_argument('--checkpoint_path',         type=str,   default="checkpoints/rl_nbv")
-    parser.add_argument('--is_save_model',           type=int,   default=0)
-    parser.add_argument('--is_save_replay_buffer',   type=int,   default=0)
-    parser.add_argument('--save_freq',               type=int,   default=10000, help='Frequency to save periodic checkpoints')
-    parser.add_argument('--eval_freq',               type=int,   default=10000, help='Frequency to evaluate and save best model')
+    parser.add_argument("--output_file", type=str, required=True)
+    parser.add_argument("--checkpoint_path", type=str, default="checkpoints/rl_nbv")
+    parser.add_argument("--is_save_model", type=int, default=0)
+    parser.add_argument("--is_save_replay_buffer", type=int, default=0)
+    parser.add_argument(
+        "--save_freq",
+        type=int,
+        default=10000,
+        help="Frequency to save periodic checkpoints",
+    )
+    parser.add_argument(
+        "--eval_freq",
+        type=int,
+        default=10000,
+        help="Frequency to evaluate and save best model",
+    )
 
     # Pretrained
-    parser.add_argument('--is_transform',            type=int,   default=0)
-    parser.add_argument('--is_freeze_fe',            type=int,   default=0)
-    parser.add_argument('--pretrained_model_path',   type=str,   default="null")
+    parser.add_argument("--is_transform", type=int, default=0)
+    parser.add_argument("--is_freeze_fe", type=int, default=0)
+    parser.add_argument("--pretrained_model_path", type=str, default="null")
 
     # Replay Buffer
-    parser.add_argument('--is_load_replay_buffer',   type=int,   default=0)
-    parser.add_argument('--replay_buffer_path',      type=str,   default="null")
+    parser.add_argument("--is_load_replay_buffer", type=int, default=0)
+    parser.add_argument("--replay_buffer_path", type=str, default="null")
 
     # Training
-    parser.add_argument('--is_profile',              type=int,   default=0)
-    parser.add_argument('--resume',                  type=int,   default=0)
+    parser.add_argument("--is_profile", type=int, default=0)
+    parser.add_argument("--resume", type=int, default=0)
 
     # Logging
-    parser.add_argument('--log_file',                type=str,   default='train_detail.log')
+    parser.add_argument("--log_file", type=str, default="train_detail.log")
 
     args = parser.parse_args()
 
@@ -285,14 +314,14 @@ if __name__ == '__main__':
 
     # ── Training config ───────────────────────────────────────────────────────
     coverage_log_freq = args.eval_freq if args.is_profile == 0 else 200
-    total_steps       = args.total_steps if args.is_profile == 0 else 2000
+    total_steps = args.total_steps if args.is_profile == 0 else 2000
     logger.info("Total steps       : {}".format(total_steps))
     logger.info("Coverage log freq (eval) : {}".format(coverage_log_freq))
 
     # ── Environments ──────────────────────────────────────────────────────────
     logger.info("Building environments...")
     if args.is_vec_env:
-        env_list  = [make_env(args.data_path, i, args) for i in range(args.env_num)]
+        env_list = [make_env(args.data_path, i, args) for i in range(args.env_num)]
         train_env = stable_baselines3.common.vec_env.SubprocVecEnv(env_list)
         logger.info("VecEnv: {} workers".format(args.env_num))
     else:
@@ -302,20 +331,20 @@ if __name__ == '__main__':
             observation_space_dim=args.observation_space_dim,
             log_level=logging.INFO,
             is_ratio_reward=False,
-            is_reward_with_cur_coverage=False
+            is_reward_with_cur_coverage=False,
         )
 
     verify_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.verify_data_path,
         view_num=args.view_num,
         observation_space_dim=args.observation_space_dim,
-        log_level=logging.INFO
+        log_level=logging.INFO,
     )
     test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.test_data_path,
         view_num=args.view_num,
         observation_space_dim=args.observation_space_dim,
-        log_level=logging.INFO
+        log_level=logging.INFO,
     )
     logger.info("Environments ready ✅")
     log_gpu_memory(logger, tag="[after envs]")
@@ -324,7 +353,7 @@ if __name__ == '__main__':
     policy_kwargs = dict(
         features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
         features_extractor_kwargs=dict(features_dim=128),
-        optimizer_class=optim.adamw.AdamW
+        optimizer_class=optim.adamw.AdamW,
     )
 
     # ── Model ─────────────────────────────────────────────────────────────────
@@ -342,16 +371,16 @@ if __name__ == '__main__':
             env=train_env,
             policy_kwargs=policy_kwargs,
             verbose=1,
-            device=args.device,                           # ✅ from config
-            learning_starts=args.learning_starts,         # ✅ from config
-            batch_size=args.batch_size,                   # ✅ from config
-            buffer_size=args.buffer_size,                 # ✅ from config
-            exploration_fraction=args.exploration_fraction,   # ✅ from config
-            exploration_final_eps=args.exploration_final_eps, # ✅ from config
-            gradient_steps=args.gradient_steps,           # ✅ from config
-            learning_rate=linear_schedule(args.learning_rate), # ✅ from config
-            train_freq=args.train_freq,                   # ✅ from config
-            gamma=args.gamma                              # ✅ from config
+            device=args.device,  # ✅ from config
+            learning_starts=args.learning_starts,  # ✅ from config
+            batch_size=args.batch_size,  # ✅ from config
+            buffer_size=args.buffer_size,  # ✅ from config
+            exploration_fraction=args.exploration_fraction,  # ✅ from config
+            exploration_final_eps=args.exploration_final_eps,  # ✅ from config
+            gradient_steps=args.gradient_steps,  # ✅ from config
+            learning_rate=linear_schedule(args.learning_rate),  # ✅ from config
+            train_freq=args.train_freq,  # ✅ from config
+            gamma=args.gamma,  # ✅ from config
         )
         logger.info("DQN model created ✅")
 
@@ -382,7 +411,7 @@ if __name__ == '__main__':
         check_freq=coverage_log_freq,
         best_model_path=os.path.join(args.checkpoint_path, "best_model_coverage"),
         save_freq=args.save_freq,
-        save_path=args.checkpoint_path
+        save_path=args.checkpoint_path,
     )
 
     # ── Training ──────────────────────────────────────────────────────────────
@@ -396,17 +425,19 @@ if __name__ == '__main__':
             logger.info("Profiling mode enabled")
             with profile(
                 activities=[ProfilerActivity.CUDA],
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
                 profile_memory=True,
                 record_shapes=True,
                 with_stack=True,
-                with_modules=True
+                with_modules=True,
             ) as prof:
                 with record_function("train"):
                     model.learn(total_steps, callback=custom_callback)
-            logger.info(prof.key_averages().table(
-                sort_by="self_cuda_memory_usage", row_limit=400
-            ))
+            logger.info(
+                prof.key_averages().table(
+                    sort_by="self_cuda_memory_usage", row_limit=400
+                )
+            )
 
     except KeyboardInterrupt:
         logger.warning("Interrupted! Saving emergency checkpoint...")
@@ -414,13 +445,13 @@ if __name__ == '__main__':
             model,
             args.checkpoint_path + "_interrupted",
             logger,
-            timestep=model.num_timesteps
+            timestep=model.num_timesteps,
         )
 
     elapsed = time.time() - start_time
-    logger.info("Training done in: {}".format(
-        time.strftime("%H:%M:%S", time.gmtime(elapsed))
-    ))
+    logger.info(
+        "Training done in: {}".format(time.strftime("%H:%M:%S", time.gmtime(elapsed)))
+    )
     log_gpu_memory(logger, tag="[after training]")
 
     # ── Save + Evaluate ───────────────────────────────────────────────────────
@@ -433,7 +464,9 @@ if __name__ == '__main__':
 
         with open(args.output_file, "a+", encoding="utf-8") as f:
             f.write("------ Before Save ------\n")
-        caculate_average_coverage(test_env, model, args.step_size, args.output_file, logger)
+        caculate_average_coverage(
+            test_env, model, args.step_size, args.output_file, logger
+        )
 
         logger.info("Clearing GPU before reload...")
         del model
@@ -444,13 +477,15 @@ if __name__ == '__main__':
             path="rl_nbv",
             env=train_env,
             policy_kwargs=policy_kwargs,
-            policy="MultiInputPolicy"
+            policy="MultiInputPolicy",
         )
         logger.info("Model reloaded ✅")
 
         with open(args.output_file, "a+", encoding="utf-8") as f:
             f.write("------ After Save ------\n")
-        caculate_average_coverage(test_env, model, args.step_size, args.output_file, logger)
+        caculate_average_coverage(
+            test_env, model, args.step_size, args.output_file, logger
+        )
 
     clear_gpu_memory(logger)
     log_gpu_memory(logger, tag="[final]")

@@ -1,6 +1,6 @@
 # **RL-NBV**
 This repository hosts the implementation of RL-NBV which is a deep reinforcement learning based Next-Best-View method for unknown object reconstruction.
-<p>    
+<p>
 <img  src="./img/drl_framework.jpg"  width="300" />
 </p>
 
@@ -52,11 +52,11 @@ python ig_proxy.py
 ./run_benchmark.sh
 ```
 Then, press **'g'** in Terminal 4 to start the validation process. The models in the preset test dataset will be tested sequentially, with the following results:
-<p>    
+<p>
 <img  src="./img/validation.gif"  width="800" />
 </p>
 The nodes and topics of ROS are as follows:
-<p>    
+<p>
 <img  src="./img/rqt_graph.png"  width="800" />
 </p>
 
@@ -72,4 +72,3 @@ This work was inspired by the following project:
 [gym](https://github.com/openai/gym)
 
 [stable-baselines3](https://github.com/DLR-RM/stable-baselines3)
-

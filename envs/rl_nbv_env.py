@@ -8,11 +8,13 @@ import random
 import torch
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from distance.chamfer_distance import ChamferDistanceFunction
 import logging
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 
 def resample_pcd(pcd, n, logger, name):
     """Drop or duplicate points so that pcd has exactly n points"""
@@ -21,14 +23,16 @@ def resample_pcd(pcd, n, logger, name):
         return np.zeros((n, 3))
     idx = np.random.permutation(pcd.shape[0])
     if idx.shape[0] < n:
-        idx = np.concatenate([idx, np.random.randint(pcd.shape[0], size=n-pcd.shape[0])])
+        idx = np.concatenate(
+            [idx, np.random.randint(pcd.shape[0], size=n - pcd.shape[0])]
+        )
     return pcd[idx[:n]]
 
 
 def normalize_pc(points, logger, name):
     centroid = np.mean(points, axis=0)
     points -= centroid
-    furthest_distance = np.max(np.sqrt(np.sum(abs(points)**2,axis=-1)))
+    furthest_distance = np.max(np.sqrt(np.sum(abs(points) ** 2, axis=-1)))
     if furthest_distance == 0:
         logger.error("furthest_distance is 0, model: {}".format(name))
         return points
@@ -37,34 +41,40 @@ def normalize_pc(points, logger, name):
 
 
 class PointCloudNextBestViewEnv(gym.Env):
-    def __init__(self,
-                 data_path,
-                 view_num=33,
-                 begin_view=-1,
-                 observation_space_dim=-1,
-                 terminated_coverage=0.97,
-                 max_step=11,
-                 env_id=None,
-                 log_level=logging.DEBUG,
-                 is_print=False,
-                 is_normalize=True,
-                 is_ratio_reward=False,
-                 is_reward_with_cur_coverage=False,
-                 cur_coverage_ratio=1.0):
+    def __init__(
+        self,
+        data_path,
+        view_num=33,
+        begin_view=-1,
+        observation_space_dim=-1,
+        terminated_coverage=0.97,
+        max_step=11,
+        env_id=None,
+        log_level=logging.DEBUG,
+        is_print=False,
+        is_normalize=True,
+        is_ratio_reward=False,
+        is_reward_with_cur_coverage=False,
+        cur_coverage_ratio=1.0,
+    ):
         self.COVERAGE_THRESHOLD = 0.00005
         self.is_ratio_reward = is_ratio_reward
         self.is_reward_with_cur_coverage = is_reward_with_cur_coverage
         self.cur_coverage_ratio = cur_coverage_ratio
         self.terminated_coverage = terminated_coverage
         self.action_space = spaces.Discrete(view_num)
-        self.DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        self.DEVICE = (
+            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        )
         self._init_logger(env_id, log_level, is_print=is_print)
         self.logger.info("PointCloudNextBestViewEnv is ok")
         real_data_path = data_path
         if env_id is not None:
             real_data_path = os.path.join(data_path, str(env_id))
-        self.shapenet_reader = shapenet_reader.ShapenetReader(real_data_path, view_num, self.logger, True)
-        self.view_state = np.zeros(view_num, dtype=np.int32) 
+        self.shapenet_reader = shapenet_reader.ShapenetReader(
+            real_data_path, view_num, self.logger, True
+        )
+        self.view_state = np.zeros(view_num, dtype=np.int32)
         self.view_num = view_num
         self.begin_view = begin_view
         self.max_step = max_step
@@ -74,49 +84,64 @@ class PointCloudNextBestViewEnv(gym.Env):
         else:
             self.current_view = self.begin_view
         self.action_history = [self.current_view]
-        self.current_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(self.current_view)
+        self.current_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(
+            self.current_view
+        )
         self.ground_truth_points_cloud = self.shapenet_reader.ground_truth
         self.ground_truth_points_cloud_size = self.ground_truth_points_cloud.shape[0]
-        self.ground_truth_tensor = self.shapenet_reader.ground_truth[np.newaxis, :, :].astype(np.float32)
-        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(self.DEVICE)
+        self.ground_truth_tensor = self.shapenet_reader.ground_truth[
+            np.newaxis, :, :
+        ].astype(np.float32)
+        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(
+            self.DEVICE
+        )
         self.view_state[self.current_view] = 1
         self.observation_space_dim = observation_space_dim
         self.is_normalize = is_normalize
         if observation_space_dim == -1:
             # for debug
-            self.observation_space = spaces.Dict({
-                "current_point_cloud": spaces.Box(low=float("-inf"), 
-                                                  high=float("inf"), 
-                                                  shape=(512, 3), 
-                                                  dtype=np.float64),
-                "view_state": spaces.Box(low=0,
-                                         high=1,
-                                         shape=(view_num,),
-                                         dtype=np.int32),
-            })
+            self.observation_space = spaces.Dict(
+                {
+                    "current_point_cloud": spaces.Box(
+                        low=float("-inf"),
+                        high=float("inf"),
+                        shape=(512, 3),
+                        dtype=np.float64,
+                    ),
+                    "view_state": spaces.Box(
+                        low=0, high=1, shape=(view_num,), dtype=np.int32
+                    ),
+                }
+            )
         else:
             if self.is_normalize:
-                self.observation_space = spaces.Dict({
-                    "current_point_cloud": spaces.Box(low=float("-1"), 
-                                                      high=float("1"), 
-                                                      shape=(3, observation_space_dim), 
-                                                      dtype=np.float64),
-                    "view_state": spaces.Box(low=0,
-                                             high=1,
-                                             shape=(view_num,),
-                                             dtype=np.int32),
-                })
+                self.observation_space = spaces.Dict(
+                    {
+                        "current_point_cloud": spaces.Box(
+                            low=float("-1"),
+                            high=float("1"),
+                            shape=(3, observation_space_dim),
+                            dtype=np.float64,
+                        ),
+                        "view_state": spaces.Box(
+                            low=0, high=1, shape=(view_num,), dtype=np.int32
+                        ),
+                    }
+                )
             else:
-                self.observation_space = spaces.Dict({
-                    "current_point_cloud": spaces.Box(low=float("-inf"), 
-                                                    high=float("inf"), 
-                                                    shape=(3, observation_space_dim), 
-                                                    dtype=np.float64),
-                    "view_state": spaces.Box(low=0,
-                                            high=1,
-                                            shape=(view_num,),
-                                            dtype=np.int32),
-                })
+                self.observation_space = spaces.Dict(
+                    {
+                        "current_point_cloud": spaces.Box(
+                            low=float("-inf"),
+                            high=float("inf"),
+                            shape=(3, observation_space_dim),
+                            dtype=np.float64,
+                        ),
+                        "view_state": spaces.Box(
+                            low=0, high=1, shape=(view_num,), dtype=np.int32
+                        ),
+                    }
+                )
         self.current_coverage = self._caculate_current_coverage()
         self.coverage_add = self.current_coverage
         self.step_cnt = 1
@@ -131,18 +156,26 @@ class PointCloudNextBestViewEnv(gym.Env):
             observation = self._get_observation_space()
             terminated = self._get_terminated()
             info = self._get_info()
-            self.logger.debug("[step] action: {:2d}, cover_add: {:.2f}, cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(action, 0, self.current_coverage * 100, self.step_cnt, terminated))
+            self.logger.debug(
+                "[step] action: {:2d}, cover_add: {:.2f}, cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(
+                    action, 0, self.current_coverage * 100, self.step_cnt, terminated
+                )
+            )
             return observation, reward, terminated, info
         new_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(action)
         self.view_state[action] = 1
-        new_points_cloud_tensor = new_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        new_points_cloud_tensor = new_points_cloud[np.newaxis, :, :].astype(np.float32)
         new_points_cloud_tensor = torch.tensor(new_points_cloud_tensor).to(self.DEVICE)
-        cur_points_cloud_tensor = self.current_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        cur_points_cloud_tensor = self.current_points_cloud[np.newaxis, :, :].astype(
+            np.float32
+        )
         cur_points_cloud_tensor = torch.tensor(cur_points_cloud_tensor).to(self.DEVICE)
-        dist1, dist2 =  ChamferDistanceFunction.apply(new_points_cloud_tensor, cur_points_cloud_tensor)  
-        dist1 = dist1.cpu().numpy()      
+        dist1, dist2 = ChamferDistanceFunction.apply(
+            new_points_cloud_tensor, cur_points_cloud_tensor
+        )
+        dist1 = dist1.cpu().numpy()
         overlay_flag = dist1 < self.COVERAGE_THRESHOLD
-        
+
         increase_points_cloud = new_points_cloud[~overlay_flag[0, :]]
         if increase_points_cloud.shape[0] == 0:
             # print("[INFO] increase_points_cloud shape is 0")
@@ -151,14 +184,24 @@ class PointCloudNextBestViewEnv(gym.Env):
             observation = self._get_observation_space()
             terminated = self._get_terminated()
             info = self._get_info()
-            self.logger.debug("[step] action: {:2d}, cover_add: {:.2f}, cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(action, 0, self.current_coverage * 100, self.step_cnt, terminated))
+            self.logger.debug(
+                "[step] action: {:2d}, cover_add: {:.2f}, cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(
+                    action, 0, self.current_coverage * 100, self.step_cnt, terminated
+                )
+            )
             return observation, reward, terminated, info
 
-        self.current_points_cloud = np.append(self.current_points_cloud, increase_points_cloud, axis=0)
-        increase_points_tensor = increase_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        self.current_points_cloud = np.append(
+            self.current_points_cloud, increase_points_cloud, axis=0
+        )
+        increase_points_tensor = increase_points_cloud[np.newaxis, :, :].astype(
+            np.float32
+        )
         increase_points_tensor = torch.tensor(increase_points_tensor).to(self.DEVICE)
-        dist1, dist2 = ChamferDistanceFunction.apply(increase_points_tensor, self.ground_truth_tensor)  
-        dist2 = dist2.cpu().numpy()      
+        dist1, dist2 = ChamferDistanceFunction.apply(
+            increase_points_tensor, self.ground_truth_tensor
+        )
+        dist2 = dist2.cpu().numpy()
         cover_flag = dist2 < self.COVERAGE_THRESHOLD
         # cover_flag = cover_flag[0, :]
         cover_add = np.sum(cover_flag == True)
@@ -167,13 +210,21 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.coverage_add = cover_add
 
         # Points that have already been covered will no longer be counted repeatedly
-        self.current_points_cloud_from_gt = np.append(self.current_points_cloud_from_gt,
-                                                      self.ground_truth_points_cloud[cover_flag[0, :]],
-                                                      axis=0)
-        self.ground_truth_points_cloud = self.ground_truth_points_cloud[~cover_flag[0, :]]
-        self.ground_truth_tensor = self.ground_truth_points_cloud[np.newaxis, :, :].astype(np.float32)
-        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(self.DEVICE)
-        
+        self.current_points_cloud_from_gt = np.append(
+            self.current_points_cloud_from_gt,
+            self.ground_truth_points_cloud[cover_flag[0, :]],
+            axis=0,
+        )
+        self.ground_truth_points_cloud = self.ground_truth_points_cloud[
+            ~cover_flag[0, :]
+        ]
+        self.ground_truth_tensor = self.ground_truth_points_cloud[
+            np.newaxis, :, :
+        ].astype(np.float32)
+        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(
+            self.DEVICE
+        )
+
         reward = self._get_reward(cover_add, action)
         observation = self._get_observation_space()
         terminated = self._get_terminated()
@@ -182,30 +233,46 @@ class PointCloudNextBestViewEnv(gym.Env):
         if cover_add == 1:
             self.logger.error("cover_add is 1")
             self._get_debug_info()
-        self.logger.debug("[step] action: {:2d}, cover_add: {:.2f}, cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(action, cover_add * 100, self.current_coverage * 100, self.step_cnt, terminated))
+        self.logger.debug(
+            "[step] action: {:2d}, cover_add: {:.2f}, cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(
+                action,
+                cover_add * 100,
+                self.current_coverage * 100,
+                self.step_cnt,
+                terminated,
+            )
+        )
         return observation, reward, terminated, info
-    
+
     # for greedy policy test
     def try_step(self, action):
         if self.view_state[action] == 1:
             return 0
         new_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(action)
-        new_points_cloud_tensor = new_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        new_points_cloud_tensor = new_points_cloud[np.newaxis, :, :].astype(np.float32)
         new_points_cloud_tensor = torch.tensor(new_points_cloud_tensor).to(self.DEVICE)
-        cur_points_cloud_tensor = self.current_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        cur_points_cloud_tensor = self.current_points_cloud[np.newaxis, :, :].astype(
+            np.float32
+        )
         cur_points_cloud_tensor = torch.tensor(cur_points_cloud_tensor).to(self.DEVICE)
-        dist1, dist2 =  ChamferDistanceFunction.apply(new_points_cloud_tensor, cur_points_cloud_tensor)  
-        dist1 = dist1.cpu().numpy()      
+        dist1, dist2 = ChamferDistanceFunction.apply(
+            new_points_cloud_tensor, cur_points_cloud_tensor
+        )
+        dist1 = dist1.cpu().numpy()
         overlay_flag = dist1 < self.COVERAGE_THRESHOLD
-        
+
         increase_points_cloud = new_points_cloud[~overlay_flag[0, :]]
         if increase_points_cloud.shape[0] == 0:
             return 0
 
-        increase_points_tensor = increase_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        increase_points_tensor = increase_points_cloud[np.newaxis, :, :].astype(
+            np.float32
+        )
         increase_points_tensor = torch.tensor(increase_points_tensor).to(self.DEVICE)
-        dist1, dist2 = ChamferDistanceFunction.apply(increase_points_tensor, self.ground_truth_tensor)  
-        dist2 = dist2.cpu().numpy()      
+        dist1, dist2 = ChamferDistanceFunction.apply(
+            increase_points_tensor, self.ground_truth_tensor
+        )
+        dist2 = dist2.cpu().numpy()
         cover_flag = dist2 < self.COVERAGE_THRESHOLD
         # cover_flag = cover_flag[0, :]
         cover_add = np.sum(cover_flag == True)
@@ -214,7 +281,7 @@ class PointCloudNextBestViewEnv(gym.Env):
 
     def reset(self, init_step=-1):
         self.shapenet_reader.get_next_model()
-        self.view_state = np.zeros(self.view_num, dtype=np.int32) 
+        self.view_state = np.zeros(self.view_num, dtype=np.int32)
         self.action_history.clear()
         if self.begin_view == -1:
             self.current_view = random.randint(0, self.view_num - 1)
@@ -223,12 +290,18 @@ class PointCloudNextBestViewEnv(gym.Env):
         if init_step != -1:
             self.current_view = init_step
         self.action_history.append(self.current_view)
-        self.current_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(self.current_view)
+        self.current_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(
+            self.current_view
+        )
         self.view_state[self.current_view] = 1
         self.ground_truth_points_cloud = self.shapenet_reader.ground_truth
         self.ground_truth_points_cloud_size = self.ground_truth_points_cloud.shape[0]
-        self.ground_truth_tensor = self.shapenet_reader.ground_truth[np.newaxis, :, :].astype(np.float32)
-        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(self.DEVICE)
+        self.ground_truth_tensor = self.shapenet_reader.ground_truth[
+            np.newaxis, :, :
+        ].astype(np.float32)
+        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(
+            self.DEVICE
+        )
         self.current_coverage = self._caculate_current_coverage()
         self.coverage_add = self.current_coverage
         self.step_cnt = 1
@@ -245,20 +318,32 @@ class PointCloudNextBestViewEnv(gym.Env):
         pass
 
     def _caculate_current_coverage(self):
-        cur_points_cloud_tensor = self.current_points_cloud[np.newaxis, :, :].astype(np.float32) 
+        cur_points_cloud_tensor = self.current_points_cloud[np.newaxis, :, :].astype(
+            np.float32
+        )
         cur_points_cloud_tensor = torch.tensor(cur_points_cloud_tensor).to(self.DEVICE)
-        dist1, dist2 = ChamferDistanceFunction.apply(cur_points_cloud_tensor, self.ground_truth_tensor)  
-        dist2 = dist2.cpu().numpy()      
+        dist1, dist2 = ChamferDistanceFunction.apply(
+            cur_points_cloud_tensor, self.ground_truth_tensor
+        )
+        dist2 = dist2.cpu().numpy()
         cover_flag = dist2 < self.COVERAGE_THRESHOLD
         # cover_flag = cover_flag[0, :]
         coverage = np.sum(cover_flag == True)
         coverage = coverage / self.ground_truth_points_cloud_size
 
         # Points that have already been covered will no longer be counted repeatedly
-        self.current_points_cloud_from_gt = self.ground_truth_points_cloud[cover_flag[0, :]]
-        self.ground_truth_points_cloud = self.ground_truth_points_cloud[~cover_flag[0, :]]
-        self.ground_truth_tensor = self.ground_truth_points_cloud[np.newaxis, :, :].astype(np.float32)
-        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(self.DEVICE)
+        self.current_points_cloud_from_gt = self.ground_truth_points_cloud[
+            cover_flag[0, :]
+        ]
+        self.ground_truth_points_cloud = self.ground_truth_points_cloud[
+            ~cover_flag[0, :]
+        ]
+        self.ground_truth_tensor = self.ground_truth_points_cloud[
+            np.newaxis, :, :
+        ].astype(np.float32)
+        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(
+            self.DEVICE
+        )
         return coverage
 
     def _get_reward(self, cover_add, action):
@@ -288,7 +373,12 @@ class PointCloudNextBestViewEnv(gym.Env):
             cur_pc = self.current_points_cloud_from_gt.T
             return {"current_point_cloud": cur_pc, "view_state": self.view_state}
         else:
-            cur_pc = resample_pcd(self.current_points_cloud_from_gt, self.observation_space_dim, self.logger, self.model_name)
+            cur_pc = resample_pcd(
+                self.current_points_cloud_from_gt,
+                self.observation_space_dim,
+                self.logger,
+                self.model_name,
+            )
             if self.is_normalize:
                 cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
             # for PC_NBV net
@@ -300,14 +390,20 @@ class PointCloudNextBestViewEnv(gym.Env):
             return True
         else:
             return False
-        
+
     def _get_info(self):
-        return {"cur_points_cloud": self.ground_truth_points_cloud, 
-                "model_name": self.model_name, 
-                "current_coverage": self.current_coverage}
+        return {
+            "cur_points_cloud": self.ground_truth_points_cloud,
+            "model_name": self.model_name,
+            "current_coverage": self.current_coverage,
+        }
 
     def _get_debug_info(self):
-        self.logger.info("model name:{}, action history: {}".format(self.model_name, self.action_history))
+        self.logger.info(
+            "model name:{}, action history: {}".format(
+                self.model_name, self.action_history
+            )
+        )
 
     def _init_logger(self, env_id, log_level, is_print=False, is_log_file=True):
         log_path = None
@@ -318,7 +414,9 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self.logger = logging.getLogger(log_path)
         self.logger.setLevel(log_level)
-        log_format = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S')
+        log_format = logging.Formatter(
+            "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+        )
 
         if is_print:
             shell_handle = logging.StreamHandler()

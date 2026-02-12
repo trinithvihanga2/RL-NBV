@@ -5,6 +5,7 @@ import time
 import open3d as o3d
 import numpy as np
 
+
 def covert_obj_2_pcd_open3d(model_obj_path, model_pcd_path):
     mesh = o3d.io.read_triangle_mesh(model_obj_path)
     mesh.compute_vertex_normals()
@@ -23,14 +24,14 @@ def delete_texture(mode_path):
                 os.system("rm -rf {}".format(file_path))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str, required=True)
-    parser.add_argument('--output_path', type=str, required=True)
-    parser.add_argument('--use_open3d', type=int, required=True)
-    parser.add_argument('--delete_texture', type=int, required=True)
+    parser.add_argument("--data_path", type=str, required=True)
+    parser.add_argument("--output_path", type=str, required=True)
+    parser.add_argument("--use_open3d", type=int, required=True)
+    parser.add_argument("--delete_texture", type=int, required=True)
     args = parser.parse_args()
-    
+
     # check input arguments
     if not os.path.exists(args.data_path):
         print("[ERRO] data path is not exist")
@@ -39,7 +40,7 @@ if __name__ == '__main__':
         print("[ERRO] output path is not exist")
         exit
 
-    if args.use_open3d == 0:  
+    if args.use_open3d == 0:
         # build the project
         os.system("./build.sh")
         if not os.path.exists("./build/mesh_sampling"):
@@ -58,7 +59,10 @@ if __name__ == '__main__':
         finished = "*" * int(percentage)
         rest = "." * (100 - int(percentage))
         duration = time.perf_counter() - start
-        print("\r{:^3.0f}%[{}->{}]{:.2f}s".format(percentage, finished, rest, duration), end = "")
+        print(
+            "\r{:^3.0f}%[{}->{}]{:.2f}s".format(percentage, finished, rest, duration),
+            end="",
+        )
         iter += 1
 
         model_output_path = os.path.join(args.output_path, model)
@@ -69,12 +73,15 @@ if __name__ == '__main__':
         if args.delete_texture == 1:
             model_path = os.path.join(args.data_path, model)
             delete_texture(model_path)
-        
+
         model_obj_path = os.path.join(args.data_path, model, "model.obj")
         model_pcd_path = os.path.join(model_output_path, "model.pcd")
         if args.use_open3d == 1:
             covert_obj_2_pcd_open3d(model_obj_path, model_pcd_path)
-        else:  
-            os.system("./build/mesh_sampling {} {} -no_vis_result -n_samples 16384 -write_normals -no_vox_filter".format(model_obj_path, model_pcd_path))
+        else:
+            os.system(
+                "./build/mesh_sampling {} {} -no_vis_result -n_samples 16384 -write_normals -no_vox_filter".format(
+                    model_obj_path, model_pcd_path
+                )
+            )
     print("/n")
-

@@ -2,9 +2,9 @@ import argparse
 import numpy as np
 import os
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str, required=True)
+    parser.add_argument("--data_path", type=str, required=True)
     args = parser.parse_args()
 
     if not os.path.exists(args.data_path):
@@ -18,7 +18,7 @@ if __name__ == '__main__':
     for model in model_list:
         if model == "intrinsics.txt":
             continue
-    
+
         model_path = os.path.join(args.data_path, model)
         if not os.path.isdir(model_path):
             print("[ERRO] model path: {} is not dir".format(model_path))
@@ -43,4 +43,3 @@ if __name__ == '__main__':
     else:
         print("[INFO] data check failed")
         print("[ERRO] failed model set: {}".format(failed_model_set))
-

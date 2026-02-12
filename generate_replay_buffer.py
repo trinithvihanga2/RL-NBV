@@ -9,62 +9,72 @@ import stable_baselines3
 import numpy as np
 import os
 import random
+
 # nohup ./run_generate_replay_buffer.sh > test.log 2>&1 &
 
 
 def make_env(data_path, env_id, args, logger):
     def _f():
         if args.env_num == 1:
-            env = envs.rl_nbv_env.PointCloudNextBestViewEnv(data_path=data_path,
-                                                            view_num=args.view_num,
-                                                            observation_space_dim=args.observation_space_dim,
-                                                            log_level=logging.INFO,
-                                                            is_ratio_reward=False,
-                                                            is_reward_with_cur_coverage=False)
+            env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+                data_path=data_path,
+                view_num=args.view_num,
+                observation_space_dim=args.observation_space_dim,
+                log_level=logging.INFO,
+                is_ratio_reward=False,
+                is_reward_with_cur_coverage=False,
+            )
             return env
         if args.is_ratio_reward == 1:
-            env = envs.rl_nbv_env.PointCloudNextBestViewEnv(data_path=data_path,
-                                                            view_num=args.view_num,
-                                                            observation_space_dim=args.observation_space_dim,
-                                                            env_id=env_id,
-                                                            log_level=logging.INFO,
-                                                            is_ratio_reward=True)
+            env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+                data_path=data_path,
+                view_num=args.view_num,
+                observation_space_dim=args.observation_space_dim,
+                env_id=env_id,
+                log_level=logging.INFO,
+                is_ratio_reward=True,
+            )
             logger.info("is_ratio_reward is True")
         else:
-            env = envs.rl_nbv_env.PointCloudNextBestViewEnv(data_path=data_path,
-                                                            view_num=args.view_num,
-                                                            observation_space_dim=args.observation_space_dim,
-                                                            env_id=env_id,
-                                                            log_level=logging.INFO,
-                                                            is_ratio_reward=False)
+            env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+                data_path=data_path,
+                view_num=args.view_num,
+                observation_space_dim=args.observation_space_dim,
+                env_id=env_id,
+                log_level=logging.INFO,
+                is_ratio_reward=False,
+            )
             logger.info("is_ratio_reward is False")
         return env
+
     return _f
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str, required=True)
-    parser.add_argument('--step_size', type=int, required=True)
-    parser.add_argument('--view_num', type=int, required=True)
-    parser.add_argument('--buffer_size', type=int, required=True)
-    parser.add_argument('--env_num', type=int, required=True)
-    parser.add_argument('--observation_space_dim', type=int, required=True)
-    parser.add_argument('--save_path', type=str, required=True)
-    parser.add_argument('--log_path', type=str, default="replay_buffer.log")
-    parser.add_argument('--is_load_buffer', type=int, default=0) 
-    parser.add_argument('--load_path', type=str, default=None)
-    parser.add_argument('--is_add_negative_exp', type=int, default=0)
-    parser.add_argument('--negative_exp_factor', type=float, default=0.03)
-    parser.add_argument('--is_ratio_reward', type=int, default=1)
-    parser.add_argument('--is_reward_with_cur_coverage', type=int, default=1)
-    parser.add_argument('--cur_coverage_ratio', type=float, default=1.0)
+    parser.add_argument("--data_path", type=str, required=True)
+    parser.add_argument("--step_size", type=int, required=True)
+    parser.add_argument("--view_num", type=int, required=True)
+    parser.add_argument("--buffer_size", type=int, required=True)
+    parser.add_argument("--env_num", type=int, required=True)
+    parser.add_argument("--observation_space_dim", type=int, required=True)
+    parser.add_argument("--save_path", type=str, required=True)
+    parser.add_argument("--log_path", type=str, default="replay_buffer.log")
+    parser.add_argument("--is_load_buffer", type=int, default=0)
+    parser.add_argument("--load_path", type=str, default=None)
+    parser.add_argument("--is_add_negative_exp", type=int, default=0)
+    parser.add_argument("--negative_exp_factor", type=float, default=0.03)
+    parser.add_argument("--is_ratio_reward", type=int, default=1)
+    parser.add_argument("--is_reward_with_cur_coverage", type=int, default=1)
+    parser.add_argument("--cur_coverage_ratio", type=float, default=1.0)
     args = parser.parse_args()
 
     # initialize logger
     logger = logging.getLogger(args.log_path)
     logger.setLevel(logging.DEBUG)
-    log_format = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S')
+    log_format = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
     file_handle = logging.FileHandler(args.log_path)
     file_handle.setFormatter(log_format)
     file_handle.setLevel(logging.DEBUG)
@@ -81,12 +91,14 @@ if __name__ == '__main__':
     if args.is_load_buffer == 1:
         replay_buffer = load_from_pkl(args.load_path, verbose=1)
     else:
-        replay_buffer = DictReplayBuffer(buffer_size=args.buffer_size,
-                                         observation_space=env_vec.observation_space,
-                                         action_space=env_vec.action_space,
-                                         device='cuda:1',
-                                         n_envs=args.env_num)
-    
+        replay_buffer = DictReplayBuffer(
+            buffer_size=args.buffer_size,
+            observation_space=env_vec.observation_space,
+            action_space=env_vec.action_space,
+            device="cuda:1",
+            n_envs=args.env_num,
+        )
+
     experience_size = 0
     negative_experience_size = 0
     model_size = env_vec.envs[0].shapenet_reader.model_num
@@ -127,23 +139,25 @@ if __name__ == '__main__':
             last_obs_ = deepcopy(last_obs)
             actions_ = deepcopy(actions)
 
-            replay_buffer.add(last_obs_,
-                              obs_,
-                              actions_,
-                              reward,
-                              done,
-                              info_)
+            replay_buffer.add(last_obs_, obs_, actions_, reward, done, info_)
             if np.any(np.isnan(last_obs["current_point_cloud"])):
                 logger.error("current_point_cloud has nan")
                 for env_id in range(args.env_num):
-                    logger.error("model name: {}".format(env_vec.envs[env_id].model_name))
+                    logger.error(
+                        "model name: {}".format(env_vec.envs[env_id].model_name)
+                    )
             if np.any(np.isnan(last_obs["view_state"])):
                 logger.error("view_state has nan")
                 for env_id in range(args.env_num):
-                    logger.error("model name: {}".format(env_vec.envs[env_id].model_name))
+                    logger.error(
+                        "model name: {}".format(env_vec.envs[env_id].model_name)
+                    )
             last_obs = obs
 
     logger.info("save as pkl file")
     save_to_pkl(args.save_path, replay_buffer, verbose=1)
-    logger.info("model size: {}, experiment size: {}, negative experience size: {}".format(model_size, experience_size, negative_experience_size))
-        
+    logger.info(
+        "model size: {}, experiment size: {}, negative experience size: {}".format(
+            model_size, experience_size, negative_experience_size
+        )
+    )

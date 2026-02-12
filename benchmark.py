@@ -25,6 +25,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 from scipy.spatial.transform import Rotation as R
 from threading import Thread, Lock
 import optim.adamw
+
 # nohup ./run_benchmark.sh > test.log 2>&1 &
 
 g_dqn_model = None
@@ -32,8 +33,9 @@ g_dqn_model = None
 
 def RandomExplore(env, logger, args):
     def func(obs):
-        action = random.randint(0, args.view_num -1)
+        action = random.randint(0, args.view_num - 1)
         return action
+
     return func
 
 
@@ -50,6 +52,7 @@ def IdealExplore(env, logger, args):
                 cover_add_max = cover_add_cur
                 action = i
         return action
+
     return func
 
 
@@ -58,6 +61,7 @@ def DQNExplore(env, logger, args):
         global g_dqn_model
         action, _states = g_dqn_model.predict(obs, deterministic=True)
         return action
+
     return func
 
 
@@ -68,7 +72,7 @@ class PCNBVAdapter:
         self.actions = []
         with open(args.pcnbv_action_path) as f:
             for line in f.readlines():
-                self.actions.append(int(line.strip('\n')))
+                self.actions.append(int(line.strip("\n")))
         self.cur_step = 0
 
     def PCNBVExplore(self, obs):
@@ -92,48 +96,60 @@ class InformationGainAdapter:
         self.nbv_lock = Lock()
         self.updata_down_lock = Lock()
         self.update_down = False
-        self.camera_id_pub = rospy.Publisher('camera_id_inner', Int32, queue_size=10)
-        self.point_clouds_pub = rospy.Publisher('/world/pcl_input', PointCloud2, queue_size=10)
-        self.nbv_sub = rospy.Subscriber("next_best_view", Int32, self.next_best_view_callback)
-        self.octomap_update_sub = rospy.Subscriber("/world/octomap_update_down", Int32, self.octomap_update_callback)
+        self.camera_id_pub = rospy.Publisher("camera_id_inner", Int32, queue_size=10)
+        self.point_clouds_pub = rospy.Publisher(
+            "/world/pcl_input", PointCloud2, queue_size=10
+        )
+        self.nbv_sub = rospy.Subscriber(
+            "next_best_view", Int32, self.next_best_view_callback
+        )
+        self.octomap_update_sub = rospy.Subscriber(
+            "/world/octomap_update_down", Int32, self.octomap_update_callback
+        )
         self.cur_pos = 0
         self.next_best_view = None
         self.camera_poses = np.loadtxt("./poses.txt")
         self.is_first_step = True
         # clear octomap
-        self.views_space_clear_pub = rospy.Publisher('/views/clear', Int32, queue_size=10)
-        self.octomap_clear_pub = rospy.Publisher('/world/clear', Int32, queue_size=10)
+        self.views_space_clear_pub = rospy.Publisher(
+            "/views/clear", Int32, queue_size=10
+        )
+        self.octomap_clear_pub = rospy.Publisher("/world/clear", Int32, queue_size=10)
         self.cur_step = 0
-        self.octomap_clear_sub = rospy.Subscriber("/world/octomap_clear_down", Int32, self.octomap_clear_callback)
+        self.octomap_clear_sub = rospy.Subscriber(
+            "/world/octomap_clear_down", Int32, self.octomap_clear_callback
+        )
         self.clear_down = False
         self.updata_clear_lock = Lock()
         self.nbv_update = False
-        self.camera_id_update_sub = rospy.Subscriber("camera_id_update", Int32, self.camera_id_update_callback)
+        self.camera_id_update_sub = rospy.Subscriber(
+            "camera_id_update", Int32, self.camera_id_update_callback
+        )
         self.camera_id_update_lock = Lock()
         self.camera_id_update = False
-        
+
     def camera_id_update_callback(self, data):
         self.camera_id_update_lock.acquire()
         self.camera_id_update = True
         self.camera_id_update_lock.release()
-        
+
     def octomap_update_callback(self, data):
         self.updata_down_lock.acquire()
         self.update_down = True
         self.updata_down_lock.release()
-        
+
     def octomap_clear_callback(self, data):
         self.updata_clear_lock.acquire()
         self.clear_down = True
         self.updata_clear_lock.release()
-    
+
     def next_best_view_callback(self, data):
         self.nbv_lock.acquire()
         if data.data >= 0 and data.data < self.args.view_num:
             self.next_best_view = data.data
             self.nbv_update = True
         self.nbv_lock.release()
-        
+
     def handle_first_step(self, obs):
         view_state = obs["view_state"]
         for i in range(self.args.view_num):
@@ -143,7 +159,7 @@ class InformationGainAdapter:
                 break
         self._update_camera_pose()
         self.views_space_clear_pub.publish(1)
-        
+
     def _clear_octomap(self):
         self.updata_clear_lock.acquire()
         self.update_clear = False
@@ -158,7 +174,7 @@ class InformationGainAdapter:
                 break
             time.sleep(1)
         self.logger.info("octomap clear down")
-            
+
     def _update_camera_pose(self):
         self.updata_down_lock.acquire()
         self.update_down = False
@@ -174,7 +190,9 @@ class InformationGainAdapter:
             if token:
                 break
             time.sleep(1)
-        pc_array = np.asarray(self.env.shapenet_reader.get_point_cloud_by_view_id(self.cur_pos))
+        pc_array = np.asarray(
+            self.env.shapenet_reader.get_point_cloud_by_view_id(self.cur_pos)
+        )
         world_2_camera = self._get_world_2_camera(self.cur_pos)
         pc_array = np.concatenate([pc_array, np.ones((pc_array.shape[0], 1))], axis=1)
         pc_array = pc_array.T
@@ -217,7 +235,7 @@ class InformationGainAdapter:
                     self.logger.error("Go to same view!")
                 break
             time.sleep(1)
-        self.logger.info("next best view: {}".format(nbv))    
+        self.logger.info("next best view: {}".format(nbv))
         self.cur_pos = nbv
         # clear octomap
         self.cur_step += 1
@@ -229,23 +247,44 @@ class InformationGainAdapter:
             return nbv
         self._update_camera_pose()
         return nbv
-    
+
     def _get_world_2_camera(self, camera_id):
         pose_from_file = self.camera_poses[camera_id]
         position = [pose_from_file[0], pose_from_file[1], pose_from_file[2]]
-        quaternion = [pose_from_file[3], pose_from_file[4], pose_from_file[5], pose_from_file[6]]
+        quaternion = [
+            pose_from_file[3],
+            pose_from_file[4],
+            pose_from_file[5],
+            pose_from_file[6],
+        ]
         r = R.from_quat(quaternion)
         rotation_matrix = r.as_matrix()
-        transformation = [[rotation_matrix[0][0], rotation_matrix[0][1], rotation_matrix[0][2], position[0]],
-                          [rotation_matrix[1][0], rotation_matrix[1][1], rotation_matrix[1][2], position[1]],
-                          [rotation_matrix[2][0], rotation_matrix[2][1], rotation_matrix[2][2], position[2]],
-                          [0, 0, 0, 1]]
+        transformation = [
+            [
+                rotation_matrix[0][0],
+                rotation_matrix[0][1],
+                rotation_matrix[0][2],
+                position[0],
+            ],
+            [
+                rotation_matrix[1][0],
+                rotation_matrix[1][1],
+                rotation_matrix[1][2],
+                position[1],
+            ],
+            [
+                rotation_matrix[2][0],
+                rotation_matrix[2][1],
+                rotation_matrix[2][2],
+                position[2],
+            ],
+            [0, 0, 0, 1],
+        ]
         world_2_camera = np.linalg.inv(np.asarray(transformation))
         return world_2_camera
-    
+
     def array_to_pointcloud2(cloud_arr, stamp=None, frame_id=None):
-        '''Converts a numpy record array to a sensor_msgs.msg.PointCloud2.
-        '''
+        """Converts a numpy record array to a sensor_msgs.msg.PointCloud2."""
         cloud_arr = np.atleast_2d(cloud_arr)
         cloud_msg = PointCloud2()
 
@@ -257,81 +296,110 @@ class InformationGainAdapter:
         cloud_msg.height = cloud_arr.shape[0]
         cloud_msg.width = cloud_arr.shape[1]
         # cloud_msg.fields = dtype_to_fields(cloud_arr.dtype)
-        cloud_msg.is_bigendian = False # assumption
+        cloud_msg.is_bigendian = False  # assumption
         cloud_msg.point_step = cloud_arr.dtype.itemsize
-        cloud_msg.row_step = cloud_msg.point_step*cloud_arr.shape[1]
+        cloud_msg.row_step = cloud_msg.point_step * cloud_arr.shape[1]
         cloud_msg.is_dense = True
         cloud_msg.data = cloud_arr.tostring()
-        return cloud_msg 
+        return cloud_msg
 
 
 #  Returns tuple of handles, labels for axis ax, after reordering them to conform to the label order `order`, and if unique is True, after removing entries with duplicate labels.
 def reorderLegend(ax=None, order=None):
-    if ax is None: ax=plt.gca()
+    if ax is None:
+        ax = plt.gca()
     handles, labels = ax.get_legend_handles_labels()
-    labels, handles = zip(*sorted(zip(labels, handles), key=lambda t: t[0])) # sort both labels and handles by labels
-    if order is not None: # Sort according to a given list (not necessarily complete)
-        keys=dict(zip(order,range(len(order))))
-        labels, handles = zip(*sorted(zip(labels, handles), key=lambda t,keys=keys: keys.get(t[0],np.inf)))
-    ax.legend(handles, labels, loc=4, fontsize='xx-large')
-    return(handles, labels)
+    labels, handles = zip(
+        *sorted(zip(labels, handles), key=lambda t: t[0])
+    )  # sort both labels and handles by labels
+    if order is not None:  # Sort according to a given list (not necessarily complete)
+        keys = dict(zip(order, range(len(order))))
+        labels, handles = zip(
+            *sorted(
+                zip(labels, handles), key=lambda t, keys=keys: keys.get(t[0], np.inf)
+            )
+        )
+    ax.legend(handles, labels, loc=4, fontsize="xx-large")
+    return (handles, labels)
 
 
 def plot_coverage_results(results, title="Similar testing dataset"):
-    color_map = {"Ours":"#C4323F", "Random":"#02263E", "AreaFactor":"#FA8600", "ProximityCount":"#73BAD6", "PC-NBV":"#91D542"}
-    markerfacecolor_map = {"Ours":"none", "Random":"#02263E", "AreaFactor":"none", "ProximityCount":"#73BAD6", "PC-NBV":"none"}
-    marker_map = {"Ours":"^", "Random":"o", "AreaFactor":"s", "ProximityCount":"v", "PC-NBV":"o"}
-    fig, ax = plt.subplots(layout='constrained')
+    color_map = {
+        "Ours": "#C4323F",
+        "Random": "#02263E",
+        "AreaFactor": "#FA8600",
+        "ProximityCount": "#73BAD6",
+        "PC-NBV": "#91D542",
+    }
+    markerfacecolor_map = {
+        "Ours": "none",
+        "Random": "#02263E",
+        "AreaFactor": "none",
+        "ProximityCount": "#73BAD6",
+        "PC-NBV": "none",
+    }
+    marker_map = {
+        "Ours": "^",
+        "Random": "o",
+        "AreaFactor": "s",
+        "ProximityCount": "v",
+        "PC-NBV": "o",
+    }
+    fig, ax = plt.subplots(layout="constrained")
     for key, value in results.items():
         value = value / 100
-        x = np.arange(start=1, stop=(len(value)+1))
+        x = np.arange(start=1, stop=(len(value) + 1))
         if key in color_map:
             color = color_map[key]
-            ax.plot(x, 
-                    value, 
-                    linestyle='-', 
-                    color=color, 
-                    marker=marker_map[key], 
-                    markerfacecolor=markerfacecolor_map[key], 
-                    label=key)
+            ax.plot(
+                x,
+                value,
+                linestyle="-",
+                color=color,
+                marker=marker_map[key],
+                markerfacecolor=markerfacecolor_map[key],
+                label=key,
+            )
         else:
-            ax.plot(x, value, marker='o', linestyle='-', label=key)
-        ax.legend(loc=4, fontsize='xx-large')
-    order = ["Random", "PC-NBV",  "AreaFactor", "ProximityCount", "Ours"]
+            ax.plot(x, value, marker="o", linestyle="-", label=key)
+        ax.legend(loc=4, fontsize="xx-large")
+    order = ["Random", "PC-NBV", "AreaFactor", "ProximityCount", "Ours"]
     reorderLegend(ax, order)
-    ax.set_xlabel("Number of rounds", fontsize='xx-large')
-    ax.set_ylabel("Average surface coverage", fontsize='xx-large')
+    ax.set_xlabel("Number of rounds", fontsize="xx-large")
+    ax.set_ylabel("Average surface coverage", fontsize="xx-large")
     # ax.set_title(title, fontsize='xx-large')
     plt.xticks(x, x)
     plt.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--view_num', type=int, required=True)
-    parser.add_argument('--test_data_path', type=str, required=True)
-    parser.add_argument('--observation_space_dim', type=int, required=True)
-    parser.add_argument('--step_size', type=int, required=True)
-    parser.add_argument('--is_log', type=int, default=0)
-    parser.add_argument('--log_path', type=str, required=True)
-    parser.add_argument('--test_random', type=int, default=0)
-    parser.add_argument('--test_ideal', type=int, default=0)
-    parser.add_argument('--test_information_gain', type=int, default=0)
-    parser.add_argument('--test_rlnbv', type=int, default=0)
-    parser.add_argument('--test_pcnbv', type=int, default=0)
-    parser.add_argument('--pcnbv_action_path', type=str, default=None)
-    parser.add_argument('--dqn_model_path', type=str, default=None)
-    parser.add_argument('--is_load_test_rlt', type=int, default=0)
-    parser.add_argument('--test_rlt_path', type=str, default=None)
-    parser.add_argument('--is_resume', type=int, default=0)
-    parser.add_argument('--save_detail', type=int, default=0)
-    parser.add_argument('--detail_fold', type=str, required=True)
-    parser.add_argument('--loop_num', type=int, default=1)
+    parser.add_argument("--view_num", type=int, required=True)
+    parser.add_argument("--test_data_path", type=str, required=True)
+    parser.add_argument("--observation_space_dim", type=int, required=True)
+    parser.add_argument("--step_size", type=int, required=True)
+    parser.add_argument("--is_log", type=int, default=0)
+    parser.add_argument("--log_path", type=str, required=True)
+    parser.add_argument("--test_random", type=int, default=0)
+    parser.add_argument("--test_ideal", type=int, default=0)
+    parser.add_argument("--test_information_gain", type=int, default=0)
+    parser.add_argument("--test_rlnbv", type=int, default=0)
+    parser.add_argument("--test_pcnbv", type=int, default=0)
+    parser.add_argument("--pcnbv_action_path", type=str, default=None)
+    parser.add_argument("--dqn_model_path", type=str, default=None)
+    parser.add_argument("--is_load_test_rlt", type=int, default=0)
+    parser.add_argument("--test_rlt_path", type=str, default=None)
+    parser.add_argument("--is_resume", type=int, default=0)
+    parser.add_argument("--save_detail", type=int, default=0)
+    parser.add_argument("--detail_fold", type=str, required=True)
+    parser.add_argument("--loop_num", type=int, default=1)
     args = parser.parse_args()
 
     logger = logging.getLogger(args.log_path)
     logger.setLevel(logging.DEBUG)
-    log_format = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S')
+    log_format = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
     shell_handle = logging.StreamHandler()
     shell_handle.setFormatter(log_format)
     shell_handle.setLevel(logging.DEBUG)
@@ -342,19 +410,25 @@ if __name__ == '__main__':
         file_handle.setLevel(logging.DEBUG)
         logger.addHandler(file_handle)
 
-    test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(data_path=args.test_data_path,
-                                                         view_num=args.view_num,
-                                                         observation_space_dim=args.observation_space_dim,
-                                                         log_level=logging.ERROR)
+    test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+        data_path=args.test_data_path,
+        view_num=args.view_num,
+        observation_space_dim=args.observation_space_dim,
+        log_level=logging.ERROR,
+    )
     if args.test_rlnbv == 1:
-        policy_kwargs = dict(features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
-                             features_extractor_kwargs=dict(features_dim=128),
-                             optimizer_class=optim.adamw.AdamW)
-        g_dqn_model = stable_baselines3.DQN.load(path=args.dqn_model_path, 
-                                                 env=test_env, 
-                                                 policy_kwargs=policy_kwargs, 
-                                                 policy="MultiInputPolicy",
-                                                 device='cuda:1')
+        policy_kwargs = dict(
+            features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
+            features_extractor_kwargs=dict(features_dim=128),
+            optimizer_class=optim.adamw.AdamW,
+        )
+        g_dqn_model = stable_baselines3.DQN.load(
+            path=args.dqn_model_path,
+            env=test_env,
+            policy_kwargs=policy_kwargs,
+            policy="MultiInputPolicy",
+            device="cuda:1",
+        )
 
     results = {}
     algorithms = {}
@@ -391,12 +465,16 @@ if __name__ == '__main__':
                 with open("./benchmark_ac.txt", "r", encoding="utf-8") as f:
                     lines = f.readlines()
                     for idx in range(args.step_size):
-                        average_coverage[idx] = float(lines[idx].strip('\n'))
-                        logger.info("history average coverage[{}]: {}".format(idx, average_coverage[idx]))
+                        average_coverage[idx] = float(lines[idx].strip("\n"))
+                        logger.info(
+                            "history average coverage[{}]: {}".format(
+                                idx, average_coverage[idx]
+                            )
+                        )
             if os.path.exists("./benchmark_model.txt"):
                 with open("./benchmark_model.txt") as f:
                     for line in f.readlines():
-                        model_set.add(line.strip('\n'))
+                        model_set.add(line.strip("\n"))
         init_step = 0
         for loop_id in range(args.loop_num):
             logger.info("init_step: {}".format(init_step))
@@ -418,13 +496,21 @@ if __name__ == '__main__':
                     s_time = time.time()
                     action = algorithm(obs)
                     e_time = time.time()
-                    total_time += (e_time - s_time)
+                    total_time += e_time - s_time
                     icnt += 1
                     obs, rewards, dones, info = test_env.step(action)
                     average_coverage[step_id + 1] += info["current_coverage"]
                     detail_result[step_id + 1] = info["current_coverage"]
-                    if (step_id == args.step_size - 2) and (info["current_coverage"] <= 0.9):
-                        logger.error("model name: {}, step: {}, coverage: {}".format(test_env.model_name, args.step_size, info["current_coverage"]))
+                    if (step_id == args.step_size - 2) and (
+                        info["current_coverage"] <= 0.9
+                    ):
+                        logger.error(
+                            "model name: {}, step: {}, coverage: {}".format(
+                                test_env.model_name,
+                                args.step_size,
+                                info["current_coverage"],
+                            )
+                        )
                 if algorithm_name == "IG" and args.is_resume == 1:
                     with open("./benchmark_model.txt", "a+", encoding="utf-8") as f:
                         f.write("{}\n".format(cur_model_name))
@@ -435,15 +521,21 @@ if __name__ == '__main__':
                 if loop_id == 0:
                     detail_results[cur_model_name] = detail_result
                 else:
-                    detail_results[cur_model_name] = detail_results[cur_model_name] + detail_result
-        logger.info("{} per NBV time: {:.3f}".format(algorithm_name, total_time/icnt))
+                    detail_results[cur_model_name] = (
+                        detail_results[cur_model_name] + detail_result
+                    )
+        logger.info("{} per NBV time: {:.3f}".format(algorithm_name, total_time / icnt))
         average_coverage = average_coverage / (model_size * args.loop_num)
         average_coverage = average_coverage * 100
         results[algorithm_name] = average_coverage
-        
+
         # save surface coverage each step
         if args.save_detail == 1:
-            log_file_name = "./verify_rlt/{}/".format(args.detail_fold) + algorithm_name + "_detail.rlt"
+            log_file_name = (
+                "./verify_rlt/{}/".format(args.detail_fold)
+                + algorithm_name
+                + "_detail.rlt"
+            )
             print("[INFO] Saving: {}".format(log_file_name))
             with open(log_file_name, "a+", encoding="utf-8") as f:
                 print("[INFO] Saving: {}".format(log_file_name))
@@ -464,21 +556,21 @@ if __name__ == '__main__':
             for coverage in value:
                 f.write("{:.2f}, ".format(coverage))
             f.write("\n")
-    
+
     if args.is_load_test_rlt == 1:
-        with open(args.test_rlt_path, 'r') as f:
-            lines=f.readlines()
+        with open(args.test_rlt_path, "r") as f:
+            lines = f.readlines()
             title = ""
             for index, line in enumerate(lines):
                 if index == 0:
                     title = str(line)
                     continue
-                line = line.split(':')
+                line = line.split(":")
                 if len(line) < 2:
                     break
                 algorithm_name = line[0]
                 line = line[1]
-                line = line.split(',')
+                line = line.split(",")
                 if len(line) < args.step_size:
                     logger.error("{} step size error".format(algorithm_name))
                 average_coverage = np.zeros(args.step_size)
@@ -488,4 +580,3 @@ if __name__ == '__main__':
             plot_coverage_results(results, title=title)
     else:
         plot_coverage_results(results)
-
