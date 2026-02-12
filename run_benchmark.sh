@@ -11,7 +11,6 @@ python benchmark.py --test_data_path ./data/complex_shaped_object\
                     --test_random 0\
                     --test_ideal 0\
                     --test_rlnbv 1\
-                    --test_information_gain 0\
                     --test_pcnbv 0\
                     --dqn_model_path rl_nbv\
                     --pcnbv_action_path ./actions/complex_shaped_object.txt\
