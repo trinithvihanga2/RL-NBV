@@ -1,13 +1,13 @@
 import envs.rl_nbv_env
-import models.pc_nbv
 import models.pointnet2_cls_ssg
 import numpy as np
-import gym
 import argparse
+import yaml
 import stable_baselines3
 import stable_baselines3.common.vec_env
 import time
 import os
+import sys
 import torch
 import copy
 import logging
@@ -41,6 +41,70 @@ def setup_logger(log_file="train_detail.log"):
     logger.addHandler(file_handle)
     logger.addHandler(console_handle)
     return logger
+
+
+# ============================================================================
+# CONFIG
+# ============================================================================
+def load_config(config_path):
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def config_to_args(config):
+    env = config.get("environment", {})
+    dqn = config.get("dqn", {})
+    pre = config.get("pretrained", {})
+    rb = config.get("replay_buffer", {})
+    out = config.get("output", {})
+    train = config.get("training", {})
+    log = config.get("logging", {})
+
+    return {
+        # Environment
+        "data_path": env.get("data_path"),
+        "verify_data_path": env.get("verify_data_path"),
+        "test_data_path": env.get("test_data_path"),
+        "view_num": env.get("view_num", 33),
+        "observation_space_dim": env.get("observation_space_dim", 1024),
+        "step_size": env.get("step_size", 10),
+        "is_vec_env": env.get("is_vec_env", 0),
+        "env_num": env.get("env_num", 8),
+        "is_ratio_reward": env.get("is_ratio_reward", 1),
+        # DQN
+        "device": dqn.get("device", "cuda:0"),
+        "learning_rate": dqn.get("learning_rate", 0.001),
+        "batch_size": dqn.get("batch_size", 128),
+        "buffer_size": dqn.get("buffer_size", 100000),
+        "learning_starts": dqn.get("learning_starts", 3000),
+        "exploration_fraction": dqn.get("exploration_fraction", 0.5),
+        "exploration_final_eps": dqn.get("exploration_final_eps", 0.2),
+        "gradient_steps": dqn.get("gradient_steps", 1),
+        "train_freq": dqn.get("train_freq", 16),
+        "gamma": dqn.get("gamma", 0.1),
+        "total_steps": dqn.get("total_steps", 500000),
+        # Pretrained
+        "is_transform": pre.get("is_transform", 0),
+        "pretrained_model_path": pre.get("pretrained_model_path", "null"),
+        "is_freeze_fe": pre.get("is_freeze_fe", 0),
+        # Replay Buffer
+        "is_load_replay_buffer": rb.get("is_load_replay_buffer", 0),
+        "replay_buffer_path": rb.get("replay_buffer_path", "null"),
+        "is_save_replay_buffer": rb.get("is_save_replay_buffer", 0),
+        # Output
+        "output_file": out.get("output_file", "train_result.txt"),
+        "checkpoint_path": out.get("checkpoint_path", "checkpoints/rl_nbv"),
+        "save_freq": out.get("save_freq", 10000),
+        "eval_freq": out.get("eval_freq", 10000),
+        "is_save_model": out.get("is_save_model", 1),
+        # Training
+        "is_profile": train.get("is_profile", 0),
+        "resume": train.get("resume", 0),
+        # Logging
+        "log_file": log.get("log_file", "train_detail.log"),
+        "coverage_log_freq_normal": log.get("coverage_log_freq_normal"),
+        "coverage_log_freq_profile": log.get("coverage_log_freq_profile"),
+    }
 
 
 # ============================================================================
@@ -238,66 +302,31 @@ def freeze_feature_extractor(model, logger):
 # ============================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
-    # Environment
-    parser.add_argument("--data_path", type=str, required=True)
-    parser.add_argument("--view_num", type=int, required=True)
-    parser.add_argument("--verify_data_path", type=str, required=True)
-    parser.add_argument("--test_data_path", type=str, required=True)
-    parser.add_argument("--observation_space_dim", type=int, required=True)
-    parser.add_argument("--step_size", type=int, required=True)
-    parser.add_argument("--is_vec_env", type=int, default=0)
-    parser.add_argument("--env_num", type=int, default=8)
-    parser.add_argument("--is_ratio_reward", type=int, default=1)
-
-    # DQN - ✅ ALL FROM CONFIG NOW
-    parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--learning_rate", type=float, default=0.001)
-    parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--buffer_size", type=int, default=100000)
-    parser.add_argument("--learning_starts", type=int, default=3000)
-    parser.add_argument("--exploration_fraction", type=float, default=0.5)
-    parser.add_argument("--exploration_final_eps", type=float, default=0.2)
-    parser.add_argument("--gradient_steps", type=int, default=1)
-    parser.add_argument("--train_freq", type=int, default=16)
-    parser.add_argument("--gamma", type=float, default=0.1)
-    parser.add_argument("--total_steps", type=int, default=500000)
-
-    # Output
-    parser.add_argument("--output_file", type=str, required=True)
-    parser.add_argument("--checkpoint_path", type=str, default="checkpoints/rl_nbv")
-    parser.add_argument("--is_save_model", type=int, default=0)
-    parser.add_argument("--is_save_replay_buffer", type=int, default=0)
     parser.add_argument(
-        "--save_freq",
-        type=int,
-        default=10000,
-        help="Frequency to save periodic checkpoints",
+        "--config",
+        type=str,
+        default="config.yaml",
+        help="Path to YAML config file",
     )
     parser.add_argument(
-        "--eval_freq",
-        type=int,
-        default=10000,
-        help="Frequency to evaluate and save best model",
+        "--dry-run",
+        action="store_true",
+        help="Load config and print resolved values without training",
     )
+    cli = parser.parse_args()
 
-    # Pretrained
-    parser.add_argument("--is_transform", type=int, default=0)
-    parser.add_argument("--is_freeze_fe", type=int, default=0)
-    parser.add_argument("--pretrained_model_path", type=str, default="null")
+    config_path = cli.config
+    if not os.path.exists(config_path):
+        raise FileNotFoundError("Config not found: {}".format(config_path))
 
-    # Replay Buffer
-    parser.add_argument("--is_load_replay_buffer", type=int, default=0)
-    parser.add_argument("--replay_buffer_path", type=str, default="null")
+    config = load_config(config_path)
+    args = argparse.Namespace(**config_to_args(config))
 
-    # Training
-    parser.add_argument("--is_profile", type=int, default=0)
-    parser.add_argument("--resume", type=int, default=0)
-
-    # Logging
-    parser.add_argument("--log_file", type=str, default="train_detail.log")
-
-    args = parser.parse_args()
+    if cli.dry_run:
+        print("Config: {}".format(config_path))
+        for arg, value in sorted(vars(args).items()):
+            print("  {:30s}: {}".format(arg, value))
+        sys.exit(0)
 
     # ── Logger ────────────────────────────────────────────────────────────────
     logger = setup_logger(args.log_file)
@@ -313,7 +342,18 @@ if __name__ == "__main__":
     log_gpu_memory(logger, tag="[startup]")
 
     # ── Training config ───────────────────────────────────────────────────────
-    coverage_log_freq = args.eval_freq if args.is_profile == 0 else 200
+    if args.is_profile == 0:
+        coverage_log_freq = (
+            args.coverage_log_freq_normal
+            if args.coverage_log_freq_normal is not None
+            else args.eval_freq
+        )
+    else:
+        coverage_log_freq = (
+            args.coverage_log_freq_profile
+            if args.coverage_log_freq_profile is not None
+            else 200
+        )
     total_steps = args.total_steps if args.is_profile == 0 else 2000
     logger.info("Total steps       : {}".format(total_steps))
     logger.info("Coverage log freq (eval) : {}".format(coverage_log_freq))
@@ -371,16 +411,16 @@ if __name__ == "__main__":
             env=train_env,
             policy_kwargs=policy_kwargs,
             verbose=1,
-            device=args.device,  # ✅ from config
-            learning_starts=args.learning_starts,  # ✅ from config
-            batch_size=args.batch_size,  # ✅ from config
-            buffer_size=args.buffer_size,  # ✅ from config
-            exploration_fraction=args.exploration_fraction,  # ✅ from config
-            exploration_final_eps=args.exploration_final_eps,  # ✅ from config
-            gradient_steps=args.gradient_steps,  # ✅ from config
-            learning_rate=linear_schedule(args.learning_rate),  # ✅ from config
-            train_freq=args.train_freq,  # ✅ from config
-            gamma=args.gamma,  # ✅ from config
+            device=args.device,
+            learning_starts=args.learning_starts,
+            batch_size=args.batch_size,
+            buffer_size=args.buffer_size,
+            exploration_fraction=args.exploration_fraction,
+            exploration_final_eps=args.exploration_final_eps,
+            gradient_steps=args.gradient_steps,
+            learning_rate=linear_schedule(args.learning_rate),
+            train_freq=args.train_freq,
+            gamma=args.gamma,
         )
         logger.info("DQN model created ✅")
 
