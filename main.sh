@@ -14,6 +14,7 @@ echo "[Step 1] Installing/checking uv package manager..."
 if ! command -v uv &> /dev/null; then
     echo "uv not found. Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
+    source $HOME/.local/bin/env
     echo "✓ uv installed successfully"
 else
     echo "✓ uv is already installed"
