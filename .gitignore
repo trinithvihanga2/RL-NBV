@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Environments
+.venv/
+
 # C++ Extensions (compiled objects)
 *.so
 build/

@@ -9,19 +9,31 @@ echo "========================================="
 echo "RL-NBV Setup and Training Script"
 echo "========================================="
 
-# Step 1: Install Python dependencies
 echo ""
-echo "[Step 1/7] Installing Python dependencies..."
+echo "[Step 1] Creating and activating virtual environment..."
+if [ ! -d ".venv" ]; then
+    echo "Creating Python virtual environment..."
+    python3 -m venv .venv
+    echo "✓ Virtual environment created"
+else
+    echo "✓ Virtual environment already exists"
+fi
+
+echo "Activating virtual environment..."
+source .venv/bin/activate
+echo "✓ Virtual environment activated"
+
+echo ""
+echo "[Step 2] Installing Python dependencies..."
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
-# Step 2: Build CUDA distance modules (CRITICAL!)
 echo ""
-echo "[Step 2/7] Building CUDA distance modules..."
+echo "[Step 3] Building CUDA distance modules..."
 python setup.py build_ext --inplace
 
-# Step 3: Verify build succeeded
 echo ""
-echo "[Step 3/7] Verifying CUDA modules build..."
+echo "[Step 4] Verifying CUDA modules build..."
 if ls distance/*.so 1> /dev/null 2>&1; then
     echo "✓ CUDA modules successfully built:"
     ls -la distance/*.so
@@ -31,9 +43,8 @@ else
     exit 1
 fi
 
-# Step 4: Optional dataset splitting
 echo ""
-echo "[Step 4/7] Dataset splitting (optional)..."
+echo "[Step 5] Dataset splitting (optional)..."
 read -p "Do you want to split the dataset? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -43,9 +54,8 @@ else
     echo "Skipping dataset splitting."
 fi
 
-# Step 5: Data preparation check
 echo ""
-echo "[Step 5/7] Checking data directories..."
+echo "[Step 6] Checking data directories..."
 if [ ! -d "./data/train" ]; then
     echo "⚠ Warning: ./data/train/ directory not found"
     echo "  Please ensure your training data is in ./data/train/"
@@ -59,9 +69,8 @@ if [ ! -d "./data/test" ]; then
     echo "  Please ensure your test data is in ./data/test/"
 fi
 
-# Step 6: Optional replay buffer generation
 echo ""
-echo "[Step 6/7] Replay buffer generation (optional)..."
+echo "[Step 7] Replay buffer generation (optional)..."
 read -p "Do you want to generate replay buffer with oracle policy? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -71,9 +80,8 @@ else
     echo "Skipping replay buffer generation."
 fi
 
-# Step 7: Start training
 echo ""
-echo "[Step 7/7] Starting training..."
+echo "[Step 8] Starting training..."
 python train.py --config config.yaml
 
 echo ""
