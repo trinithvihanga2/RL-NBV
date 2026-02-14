@@ -34,11 +34,24 @@ pretrained:
   pretrained_model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
   is_freeze_fe: 1
 
-# Replay Buffer
+# Replay Buffer (Training)
 replay_buffer:
   is_load_replay_buffer: 1
-  replay_buffer_path: dqn_replay_buffer
+  replay_buffer_path: ideal_policy.pkl # Using the last generated replay buffer for training
   is_save_replay_buffer: 1
+
+# Replay Buffer Generation (Oracle Policy)
+replay_buffer_generation:
+  buffer_size: 1000000
+  save_path: ideal_policy.pkl
+  log_path: replay_buffer.log
+  is_load_buffer: 0
+  load_path: null
+  is_add_negative_exp: 1
+  negative_exp_factor: 0.03
+  is_ratio_reward: 0
+  is_reward_with_cur_coverage: 0
+  cur_coverage_ratio: 1.0
 
 # Saving & Output
 output:
