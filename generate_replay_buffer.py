@@ -26,7 +26,7 @@ def config_to_args(config):
 
     return {
         # Environment
-        "data_path": rbg.get("data_path", env.get("data_path")),
+        "train_data_path": rbg.get("train_data_path", env.get("train_data_path")),
         "view_num": env.get("view_num", 33),
         "observation_space_dim": env.get("observation_space_dim", 1024),
         "step_size": env.get("step_size", 10),
@@ -156,7 +156,7 @@ if __name__ == "__main__":
     logger.info("Building environments...")
     env_list = []
     for i in range(args.env_num):
-        env_list.append(make_env(args.data_path, i, args, logger))
+        env_list.append(make_env(args.train_data_path, i, args, logger))
     env_vec = DummyVecEnv(env_list)
     logger.info("Environments ready ✅")
 

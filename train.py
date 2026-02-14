@@ -62,7 +62,7 @@ def config_to_args(config):
 
     return {
         # Environment
-        "data_path": env.get("data_path"),
+        "train_data_path": env.get("train_data_path"),
         "verify_data_path": env.get("verify_data_path"),
         "test_data_path": env.get("test_data_path"),
         "view_num": env.get("view_num", 33),
@@ -361,12 +361,14 @@ if __name__ == "__main__":
     # ── Environments ──────────────────────────────────────────────────────────
     logger.info("Building environments...")
     if args.is_vec_env:
-        env_list = [make_env(args.data_path, i, args) for i in range(args.env_num)]
+        env_list = [
+            make_env(args.train_data_path, i, args) for i in range(args.env_num)
+        ]
         train_env = stable_baselines3.common.vec_env.SubprocVecEnv(env_list)
         logger.info("VecEnv: {} workers".format(args.env_num))
     else:
         train_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
-            data_path=args.data_path,
+            data_path=args.train_data_path,
             view_num=args.view_num,
             observation_space_dim=args.observation_space_dim,
             log_level=logging.INFO,

@@ -4,7 +4,7 @@
 
 # Environment
 environment:
-  data_path: ./data/train
+  train_data_path: ./data/train
   verify_data_path: ./data/verify
   test_data_path: ./data/test
   view_num: 33
