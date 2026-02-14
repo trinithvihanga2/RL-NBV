@@ -21,9 +21,8 @@ else
 fi
 
 echo ""
-echo "[Step 2] Setting up Python 3.8 environment with uv..."
-echo "Syncing dependencies with Python 3.8..."
-uv sync --python 3.8
+echo "[Step 2] Setting up Python environment with uv..."
+uv sync
 
 echo ""
 echo "[Step 3] Building CUDA distance modules..."
