@@ -11,6 +11,7 @@ dist/
 
 # Data and Checkpoints
 data/
+dataset/
 checkpoints/
 dqn_replay_buffer.pkl
 dqn_replay_buffer
