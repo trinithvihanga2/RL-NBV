@@ -10,27 +10,23 @@ echo "RL-NBV Setup and Training Script"
 echo "========================================="
 
 echo ""
-echo "[Step 1] Creating and activating virtual environment..."
-if [ ! -d ".venv" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv .venv
-    echo "✓ Virtual environment created"
+echo "[Step 1] Installing/checking uv package manager..."
+if ! command -v uv &> /dev/null; then
+    echo "uv not found. Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    echo "✓ uv installed successfully"
 else
-    echo "✓ Virtual environment already exists"
+    echo "✓ uv is already installed"
 fi
 
-echo "Activating virtual environment..."
-source .venv/bin/activate
-echo "✓ Virtual environment activated"
-
 echo ""
-echo "[Step 2] Installing Python dependencies..."
-pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
+echo "[Step 2] Setting up Python 3.8 environment with uv..."
+echo "Syncing dependencies with Python 3.8..."
+uv sync --python 3.8
 
 echo ""
 echo "[Step 3] Building CUDA distance modules..."
-python setup.py build_ext --inplace
+uv run python setup.py build_ext --inplace
 
 echo ""
 echo "[Step 4] Verifying CUDA modules build..."
@@ -49,7 +45,7 @@ read -p "Do you want to split the dataset? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Running dataset splitting with config.yaml..."
-    python split_dataset.py --config config.yaml
+    uv run python split_dataset.py --config config.yaml
 else
     echo "Skipping dataset splitting."
 fi
@@ -75,14 +71,14 @@ read -p "Do you want to generate replay buffer with oracle policy? (y/N): " -n 1
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Generating replay buffer using oracle policy with config.yaml..."
-    python generate_replay_buffer.py --config config.yaml
+    uv run python generate_replay_buffer.py --config config.yaml
 else
     echo "Skipping replay buffer generation."
 fi
 
 echo ""
 echo "[Step 8] Starting training..."
-python train.py --config config.yaml
+uv run python train.py --config config.yaml
 
 echo ""
 echo "========================================="
