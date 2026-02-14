@@ -370,8 +370,7 @@ if __name__ == "__main__":
             view_num=args.view_num,
             observation_space_dim=args.observation_space_dim,
             log_level=logging.INFO,
-            is_ratio_reward=False,
-            is_reward_with_cur_coverage=False,
+            is_ratio_reward=(args.is_ratio_reward == 1),
         )
 
     verify_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
