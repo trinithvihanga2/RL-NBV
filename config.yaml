@@ -54,6 +54,7 @@ training:
   output:
     output_file: ./artefacts/train/train_result.txt
     checkpoint_path: ./artefacts/train/checkpoints
+    final_model_path: ./artefacts/train/final
     save_freq: 10000
     eval_freq: 10000
     is_save_model: 1

@@ -102,6 +102,7 @@ def config_to_args(config):
         # Output
         "output_file": out.get("output_file", "train_result.txt"),
         "checkpoint_path": out.get("checkpoint_path", "checkpoints/rl_nbv"),
+        "final_model_path": out.get("final_model_path", "rl_nbv"),
         "save_freq": out.get("save_freq", 10000),
         "eval_freq": out.get("eval_freq", 10000),
         "is_save_model": out.get("is_save_model", 1),
@@ -508,7 +509,9 @@ if __name__ == "__main__":
         logger.info("Replay buffer saved")
 
     if args.is_save_model == 1:
-        save_checkpoint(model, "rl_nbv", logger, timestep=model.num_timesteps)
+        save_checkpoint(
+            model, args.final_model_path, logger, timestep=model.num_timesteps
+        )
 
         with open(args.output_file, "a+", encoding="utf-8") as f:
             f.write("------ Before Save ------\n")
@@ -522,7 +525,7 @@ if __name__ == "__main__":
         log_gpu_memory(logger, tag="[after del model]")
 
         model = stable_baselines3.DQN.load(
-            path="rl_nbv",
+            path=args.final_model_path,
             env=train_env,
             policy_kwargs=policy_kwargs,
             policy="MultiInputPolicy",
