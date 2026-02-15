@@ -94,8 +94,11 @@ def config_to_args(config):
         "is_freeze_fe": pre.get("is_freeze_fe", 0),
         # Replay Buffer
         "is_load_replay_buffer": rb.get("is_load_replay_buffer", 0),
-        "replay_buffer_path": rb.get("replay_buffer_path", "null"),
+        "load_replay_buffer_path": rb.get("load_replay_buffer_path", "null"),
         "is_save_replay_buffer": rb.get("is_save_replay_buffer", 0),
+        "save_replay_buffer_path": rb.get(
+            "save_replay_buffer_path", "dqn_replay_buffer.pkl"
+        ),
         # Output
         "output_file": out.get("output_file", "train_result.txt"),
         "checkpoint_path": out.get("checkpoint_path", "checkpoints/rl_nbv"),
@@ -438,11 +441,13 @@ if __name__ == "__main__":
 
     # ── Replay buffer ─────────────────────────────────────────────────────────
     if args.is_load_replay_buffer == 1:
-        if os.path.exists(args.replay_buffer_path):
-            model.load_replay_buffer(args.replay_buffer_path)
+        if os.path.exists(args.load_replay_buffer_path):
+            model.load_replay_buffer(args.load_replay_buffer_path)
             logger.info("Replay buffer loaded ✅")
         else:
-            logger.error("Replay buffer not found: {}".format(args.replay_buffer_path))
+            logger.error(
+                "Replay buffer not found: {}".format(args.load_replay_buffer_path)
+            )
 
     log_gpu_memory(logger, tag="[before training]")
 
@@ -499,7 +504,7 @@ if __name__ == "__main__":
 
     # ── Save + Evaluate ───────────────────────────────────────────────────────
     if args.is_save_replay_buffer == 1:
-        model.save_replay_buffer("dqn_replay_buffer")
+        model.save_replay_buffer(args.save_replay_buffer_path)
         logger.info("Replay buffer saved")
 
     if args.is_save_model == 1:

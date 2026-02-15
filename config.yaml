@@ -46,8 +46,9 @@ training:
   # Replay Buffer
   replay_buffer:
     is_load_replay_buffer: 1
-    replay_buffer_path: ./artefacts/rbg/ideal_policy.pkl # Using the last generated replay buffer for training
+    load_replay_buffer_path: ./artefacts/rbg/ideal_policy.pkl # Using the last generated replay buffer for training
     is_save_replay_buffer: 1
+    save_replay_buffer_path: ./artefacts/train/dqn_replay_buffer.pkl
 
   # Saving & Output
   output:
