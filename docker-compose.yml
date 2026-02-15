@@ -1,0 +1,21 @@
+services:
+  trainer:
+    build: .
+    container_name: rl-nbv-trainer
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+      - ./artefacts:/app/artefacts
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    shm_size: "8g"
