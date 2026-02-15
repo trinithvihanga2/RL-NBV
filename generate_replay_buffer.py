@@ -21,17 +21,19 @@ def load_config(config_path):
 
 
 def config_to_args(config):
+    ds = config.get("dataset", {})
     env = config.get("environment", {})
     rbg = config.get("replay_buffer_generation", {})
 
     return {
+        # Dataset
+        "train_data_path": ds.get("train_data_path"),
         # Environment
-        "train_data_path": rbg.get("train_data_path", env.get("train_data_path")),
         "view_num": env.get("view_num", 33),
         "observation_space_dim": env.get("observation_space_dim", 1024),
-        "step_size": env.get("step_size", 10),
         "env_num": env.get("env_num", 1),
         # Replay Buffer Generation
+        "step_size": rbg.get("step_size", 10),
         "buffer_size": rbg.get("buffer_size", 1000000),
         "save_path": rbg.get("save_path", "ideal_policy"),
         "log_path": rbg.get("log_path", "replay_buffer.log"),

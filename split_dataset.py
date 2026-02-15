@@ -16,18 +16,18 @@ def load_config(config_path):
 
 
 def config_to_args(config):
-    env = config.get("environment", {})
-    ds = config.get("dataset_split", {})
+    ds = config.get("dataset", {})
+    dss = config.get("dataset_splitting", {})
 
     return {
-        "dataset_path": env.get("dataset_path", "./dataset"),
-        "train_data_path": env.get("train_data_path", "./data/train"),
-        "verify_data_path": env.get("verify_data_path", "./data/verify"),
-        "test_data_path": env.get("test_data_path", "./data/test"),
-        "train_ratio": ds.get("train_ratio", 0.7),
-        "verify_ratio": ds.get("verify_ratio", 0.15),
-        "test_ratio": ds.get("test_ratio", 0.15),
-        "seed": ds.get("seed", 42),
+        "dataset_path": ds.get("dataset_path", "./dataset"),
+        "train_data_path": ds.get("train_data_path", "./data/train"),
+        "verify_data_path": ds.get("verify_data_path", "./data/verify"),
+        "test_data_path": ds.get("test_data_path", "./data/test"),
+        "train_ratio": dss.get("train_ratio", 0.7),
+        "verify_ratio": dss.get("verify_ratio", 0.15),
+        "test_ratio": dss.get("test_ratio", 0.15),
+        "seed": dss.get("seed", 42),
     }
 
 

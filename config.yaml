@@ -2,54 +2,70 @@
 # COMPLETE TRAINING CONFIG
 # ============================================================
 
-# Environment
-environment:
+# Dataset
+dataset:
   dataset_path: ./dataset
   train_data_path: ./data/train
   verify_data_path: ./data/verify
   test_data_path: ./data/test
+
+# Environment
+environment:
   view_num: 33
   observation_space_dim: 1024
-  step_size: 10
   is_vec_env: 0 # Set  1 if multi-core CPU is available for parallel environment execution, otherwise set 0
   env_num: 1
+
+# Training
+training:
+  step_size: 10
   is_ratio_reward: 1
+  is_profile: 0
+  resume: 1
 
-# Dataset Split
-dataset_split:
-  train_ratio: 0.7
-  verify_ratio: 0.15
-  test_ratio: 0.15
-  seed: 42
+  # DQN Hyperparameters
+  dqn:
+    device: cuda:0
+    learning_rate: 0.001
+    batch_size: 128
+    buffer_size: 100000
+    learning_starts: 3000
+    exploration_fraction: 0.5
+    exploration_final_eps: 0.2
+    gradient_steps: 1
+    train_freq: 16
+    gamma: 0.1
+    total_steps: 500000
 
-# DQN Hyperparameters
-dqn:
-  device: cuda:0
-  learning_rate: 0.001
-  batch_size: 128
-  buffer_size: 100000
-  learning_starts: 3000
-  exploration_fraction: 0.5
-  exploration_final_eps: 0.2
-  gradient_steps: 1
-  train_freq: 16
-  gamma: 0.1
-  total_steps: 500000
+  # Pretrained PointNet
+  pretrained:
+    is_transform: 1
+    model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
+    is_freeze_fe: 1
 
-# Pretrained PointNet
-pretrained:
-  is_transform: 1
-  pretrained_model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
-  is_freeze_fe: 1
+  # Replay Buffer
+  replay_buffer:
+    is_load_replay_buffer: 1
+    replay_buffer_path: ideal_policy.pkl # Using the last generated replay buffer for training
+    is_save_replay_buffer: 1
 
-# Replay Buffer (Training)
-replay_buffer:
-  is_load_replay_buffer: 1
-  replay_buffer_path: ideal_policy.pkl # Using the last generated replay buffer for training
-  is_save_replay_buffer: 1
+  # Saving & Output
+  output:
+    output_file: train_result.txt
+    checkpoint_path: checkpoints/rl_nbv
+    save_freq: 10000
+    eval_freq: 10000
+    is_save_model: 1
+
+  # Logging
+  logging:
+    log_file: train_detail.log
+    coverage_log_freq_normal: 50000
+    coverage_log_freq_profile: 200
 
 # Replay Buffer Generation (Oracle Policy)
 replay_buffer_generation:
+  step_size: 10
   buffer_size: 100000
   save_path: ideal_policy.pkl
   log_path: replay_buffer.log
@@ -61,21 +77,9 @@ replay_buffer_generation:
   is_reward_with_cur_coverage: 0
   cur_coverage_ratio: 1.0
 
-# Saving & Output
-output:
-  output_file: train_result.txt
-  checkpoint_path: checkpoints/rl_nbv
-  save_freq: 10000
-  eval_freq: 10000
-  is_save_model: 1
-
-# Training Mode
-training:
-  is_profile: 0
-  resume: 1
-
-# Logging
-logging:
-  log_file: train_detail.log
-  coverage_log_freq_normal: 50000
-  coverage_log_freq_profile: 200
+# Dataset Splitting
+dataset_splitting:
+  train_ratio: 0.7
+  verify_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42

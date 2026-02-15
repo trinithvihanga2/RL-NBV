@@ -52,25 +52,30 @@ def load_config(config_path):
 
 
 def config_to_args(config):
+    ds = config.get("dataset", {})
     env = config.get("environment", {})
-    dqn = config.get("dqn", {})
-    pre = config.get("pretrained", {})
-    rb = config.get("replay_buffer", {})
-    out = config.get("output", {})
     train = config.get("training", {})
-    log = config.get("logging", {})
+    dqn = train.get("dqn", {})
+    pre = train.get("pretrained", {})
+    rb = train.get("replay_buffer", {})
+    out = train.get("output", {})
+    log = train.get("logging", {})
 
     return {
+        # Dataset
+        "train_data_path": ds.get("train_data_path"),
+        "verify_data_path": ds.get("verify_data_path"),
+        "test_data_path": ds.get("test_data_path"),
         # Environment
-        "train_data_path": env.get("train_data_path"),
-        "verify_data_path": env.get("verify_data_path"),
-        "test_data_path": env.get("test_data_path"),
         "view_num": env.get("view_num", 33),
         "observation_space_dim": env.get("observation_space_dim", 1024),
-        "step_size": env.get("step_size", 10),
         "is_vec_env": env.get("is_vec_env", 0),
         "env_num": env.get("env_num", 8),
-        "is_ratio_reward": env.get("is_ratio_reward", 1),
+        # Training
+        "step_size": train.get("step_size", 10),
+        "is_ratio_reward": train.get("is_ratio_reward", 1),
+        "is_profile": train.get("is_profile", 0),
+        "resume": train.get("resume", 0),
         # DQN
         "device": dqn.get("device", "cuda:0"),
         "learning_rate": dqn.get("learning_rate", 0.001),
@@ -85,7 +90,7 @@ def config_to_args(config):
         "total_steps": dqn.get("total_steps", 500000),
         # Pretrained
         "is_transform": pre.get("is_transform", 0),
-        "pretrained_model_path": pre.get("pretrained_model_path", "null"),
+        "pretrained_model_path": pre.get("model_path", "null"),
         "is_freeze_fe": pre.get("is_freeze_fe", 0),
         # Replay Buffer
         "is_load_replay_buffer": rb.get("is_load_replay_buffer", 0),
@@ -97,9 +102,6 @@ def config_to_args(config):
         "save_freq": out.get("save_freq", 10000),
         "eval_freq": out.get("eval_freq", 10000),
         "is_save_model": out.get("is_save_model", 1),
-        # Training
-        "is_profile": train.get("is_profile", 0),
-        "resume": train.get("resume", 0),
         # Logging
         "log_file": log.get("log_file", "train_detail.log"),
         "coverage_log_freq_normal": log.get("coverage_log_freq_normal"),
