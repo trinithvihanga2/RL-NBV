@@ -30,3 +30,6 @@ checkpoints/
 # IDEs
 .vscode/
 .idea/
+
+# Pack
+rl-nbv-trainer-bundle.zip
