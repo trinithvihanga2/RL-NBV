@@ -28,6 +28,7 @@ def config_to_args(config):
         "verify_ratio": dss.get("verify_ratio", 0.15),
         "test_ratio": dss.get("test_ratio", 0.15),
         "seed": dss.get("seed", 42),
+        "log_path": dss.get("log_path", "split_dataset.log"),
     }
 
 
@@ -166,7 +167,7 @@ if __name__ == "__main__":
         raise ValueError("Split ratios must sum to 1.0, got {}".format(total_ratio))
 
     # ── Logger ────────────────────────────────────────────────────────────────
-    logger = setup_logger()
+    logger = setup_logger(args.log_path)
     logger.info("=" * 60)
     logger.info("DATASET SPLITTING START")
     logger.info("=" * 60)

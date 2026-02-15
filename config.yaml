@@ -83,3 +83,4 @@ dataset_splitting:
   verify_ratio: 0.15
   test_ratio: 0.15
   seed: 42
+  log_path: split_dataset.log
