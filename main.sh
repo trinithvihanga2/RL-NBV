@@ -25,22 +25,7 @@ echo "[Step 2] Setting up Python environment with uv..."
 uv sync
 
 echo ""
-echo "[Step 3] Building CUDA distance modules..."
-uv run python setup.py build_ext --inplace
-
-echo ""
-echo "[Step 4] Verifying CUDA modules build..."
-if ls distance/*.so 1> /dev/null 2>&1; then
-    echo "✓ CUDA modules successfully built:"
-    ls -la distance/*.so
-else
-    echo "✗ ERROR: No .so files found in distance/ directory!"
-    echo "  Build may have failed. Please check the error messages above."
-    exit 1
-fi
-
-echo ""
-echo "[Step 5] Dataset splitting (optional)..."
+echo "[Step 3] Dataset splitting (optional)..."
 read -p "Do you want to split the dataset? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -51,7 +36,7 @@ else
 fi
 
 echo ""
-echo "[Step 6] Checking data directories..."
+echo "[Step 4] Checking data directories..."
 if [ ! -d "./data/train" ]; then
     echo "⚠ Warning: ./data/train/ directory not found"
     echo "  Please ensure your training data is in ./data/train/"
@@ -66,7 +51,7 @@ if [ ! -d "./data/test" ]; then
 fi
 
 echo ""
-echo "[Step 7] Replay buffer generation (optional)..."
+echo "[Step 5] Replay buffer generation (optional)..."
 read -p "Do you want to generate replay buffer with oracle policy? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -77,7 +62,7 @@ else
 fi
 
 echo ""
-echo "[Step 8] Starting training..."
+echo "[Step 6] Starting training..."
 uv run python train.py --config config.yaml
 
 echo ""
