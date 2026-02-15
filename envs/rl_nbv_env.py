@@ -51,7 +51,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         max_step=11,
         env_id=None,
         log_level=logging.DEBUG,
-        is_print=False,
+        is_print=True,
         is_normalize=True,
         is_ratio_reward=False,
         is_reward_with_cur_coverage=False,
