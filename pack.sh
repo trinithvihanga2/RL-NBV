@@ -21,6 +21,7 @@ FILES=(
     distance/chamfer_distance.py
     distance/chamfer_distance.cpp
     distance/chamfer_distance.cu
+    data
 )
 
 if [[ -d models/pretrained ]]; then
