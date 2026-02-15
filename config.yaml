@@ -46,20 +46,20 @@ training:
   # Replay Buffer
   replay_buffer:
     is_load_replay_buffer: 1
-    replay_buffer_path: ideal_policy.pkl # Using the last generated replay buffer for training
+    replay_buffer_path: ./artefacts/rbg/ideal_policy.pkl # Using the last generated replay buffer for training
     is_save_replay_buffer: 1
 
   # Saving & Output
   output:
-    output_file: train_result.txt
-    checkpoint_path: checkpoints/rl_nbv
+    output_file: ./artefacts/train/train_result.txt
+    checkpoint_path: ./artefacts/train/checkpoints
     save_freq: 10000
     eval_freq: 10000
     is_save_model: 1
 
   # Logging
   logging:
-    log_file: train_detail.log
+    log_file: ./artefacts/train/train.log
     coverage_log_freq_normal: 50000
     coverage_log_freq_profile: 200
 
@@ -67,8 +67,8 @@ training:
 replay_buffer_generation:
   step_size: 10
   buffer_size: 100000
-  save_path: ideal_policy.pkl
-  log_path: replay_buffer.log
+  save_path: ./artefacts/rbg/ideal_policy.pkl
+  log_path: ./artefacts/rbgreplay_buffer.log
   is_load_buffer: 0
   load_path: null
   is_add_negative_exp: 1
@@ -83,4 +83,4 @@ dataset_splitting:
   verify_ratio: 0.15
   test_ratio: 0.15
   seed: 42
-  log_path: split_dataset.log
+  log_path: ./artefacts/ds/split_dataset.log

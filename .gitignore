@@ -15,16 +15,14 @@ dist/
 # Data and Checkpoints
 data/
 dataset/
-checkpoints/
-dqn_replay_buffer.pkl
-dqn_replay_buffer
 
-# Logs and Results
+# Logs and Artefacts
 *.log
-train_result.txt
-profile_result.txt
-runs/
-log/
+artefacts/
+checkpoints/
+
+# Pickles
+*.pkl
 
 # Colab / Jupyter
 .ipynb_checkpoints/
