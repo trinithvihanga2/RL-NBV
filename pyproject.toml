@@ -1,14 +1,10 @@
-[build-system]
-requires = ["setuptools", "wheel", "torch"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "rl-nbv"
 version = "0.1.0"
 description = "Reinforcement Learning for Next Best View planning"
 readme = "README.md"
 requires-python = ">=3.11, <3.12"
-license = {text = "Apache"}
+license = "Apache-2.0"
 
 dependencies = [
     "OpenEXR",
@@ -18,6 +14,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "open3d",
+    "shimmy",
     "stable-baselines3",
     "torch",
     "torchinfo",
