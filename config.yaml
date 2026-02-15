@@ -12,7 +12,7 @@ environment:
   observation_space_dim: 1024
   step_size: 10
   is_vec_env: 0 # Set  1 if multi-core CPU is available for parallel environment execution, otherwise set 0
-  env_num: 8 # Number of cores, only effective when is_vec_env is set to 1
+  env_num: 1
   is_ratio_reward: 1
 
 # Dataset Split
