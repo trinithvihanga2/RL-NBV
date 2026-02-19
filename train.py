@@ -5,6 +5,7 @@ import argparse
 import yaml
 import stable_baselines3
 import stable_baselines3.common.vec_env
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 import time
 import os
 import sys
@@ -16,6 +17,7 @@ import torch.backends.cudnn as cudnn
 from torch.profiler import profile, record_function, ProfilerActivity
 from custom_callback import NextBestViewCustomCallback
 from typing import Callable
+from tqdm import tqdm
 import optim.adamw
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
@@ -242,6 +244,37 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
 
 
 # ============================================================================
+# PROGRESS BAR CALLBACK
+# ============================================================================
+class TqdmCallback(BaseCallback):
+    def __init__(self, total_timesteps: int, verbose: int = 0):
+        super().__init__(verbose)
+        self.total_timesteps = total_timesteps
+        self.pbar = None
+
+    def _on_training_start(self) -> None:
+        self.pbar = tqdm(
+            total=self.total_timesteps,
+            desc="Training",
+            unit="step",
+            disable=not sys.stdout.isatty(),
+        )
+
+    def _on_step(self) -> bool:
+        if self.pbar is None:
+            return True
+        delta = self.num_timesteps - self.pbar.n
+        if delta > 0:
+            self.pbar.update(delta)
+        return True
+
+    def _on_training_end(self) -> None:
+        if self.pbar is not None:
+            self.pbar.close()
+            self.pbar = None
+
+
+# ============================================================================
 # PRETRAINED WEIGHT TRANSFER
 # ============================================================================
 def transfer_pretrained_weights(model, args, logger):
@@ -462,6 +495,8 @@ if __name__ == "__main__":
         save_freq=args.save_freq,
         save_path=args.checkpoint_path,
     )
+    progress_callback = TqdmCallback(total_steps)
+    callbacks = CallbackList([custom_callback, progress_callback])
 
     # ── Training ──────────────────────────────────────────────────────────────
     logger.info("Training for {} steps...".format(total_steps))
@@ -469,7 +504,7 @@ if __name__ == "__main__":
 
     try:
         if args.is_profile == 0:
-            model.learn(total_steps, callback=custom_callback)
+            model.learn(total_steps, callback=callbacks)
         else:
             logger.info("Profiling mode enabled")
             with profile(
@@ -481,7 +516,7 @@ if __name__ == "__main__":
                 with_modules=True,
             ) as prof:
                 with record_function("train"):
-                    model.learn(total_steps, callback=custom_callback)
+                    model.learn(total_steps, callback=callbacks)
             logger.info(
                 prof.key_averages().table(
                     sort_by="self_cuda_memory_usage", row_limit=400

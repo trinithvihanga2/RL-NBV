@@ -16,6 +16,7 @@ dependencies = [
     "open3d",
     "shimmy",
     "stable-baselines3",
+    "tqdm",
     "torch",
     "torchinfo",
 ]
