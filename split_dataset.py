@@ -18,6 +18,7 @@ def load_config(config_path):
 def config_to_args(config):
     ds = config.get("dataset", {})
     dss = config.get("dataset_splitting", {})
+    env = config.get("environment", {})
 
     return {
         "dataset_path": ds.get("dataset_path", "./dataset"),
@@ -29,6 +30,7 @@ def config_to_args(config):
         "test_ratio": dss.get("test_ratio", 0.15),
         "seed": dss.get("seed", 42),
         "log_path": dss.get("log_path", "split_dataset.log"),
+        "env_num": env.get("env_num", 1),
     }
 
 
@@ -72,9 +74,10 @@ def copy_directory(src, dst, logger):
     logger.info("Copied {} -> {}".format(src, dst))
 
 
-def split_dataset(args, logger):
+def split_dataset(args, logger, env_num):
     """
     Split dataset into train, verify, and test sets.
+    Then partition each split into env_num subdirectories using symlinks.
     """
     random.seed(args.seed)
 
@@ -106,28 +109,53 @@ def split_dataset(args, logger):
         )
     )
 
-    # Create output directories
-    for path in [args.train_data_path, args.verify_data_path, args.test_data_path]:
-        os.makedirs(path, exist_ok=True)
+    logger.info("Using env_num: {}".format(env_num))
 
-    # Copy directories
-    logger.info("Copying train directories...")
-    for dir_name in train_dirs:
-        src = os.path.join(args.dataset_path, dir_name)
-        dst = os.path.join(args.train_data_path, dir_name)
-        copy_directory(src, dst, logger)
+    # Create env subdirectories for each split type
+    for base_path in [args.train_data_path, args.verify_data_path, args.test_data_path]:
+        os.makedirs(base_path, exist_ok=True)
+        for env_id in range(env_num):
+            env_dir = os.path.join(base_path, str(env_id))
+            os.makedirs(env_dir, exist_ok=True)
+            logger.debug("Created directory: {}".format(env_dir))
 
-    logger.info("Copying verify directories...")
-    for dir_name in verify_dirs:
-        src = os.path.join(args.dataset_path, dir_name)
-        dst = os.path.join(args.verify_data_path, dir_name)
-        copy_directory(src, dst, logger)
+    # Helper function to partition the data with symlinks
+    def partition_data_with_env(split_dirs, base_path, split_name, logger):
+        """Copy models to env 0 and symlink from other envs."""
+        logger.info(
+            "Partitioning {} {} into {} envs...".format(
+                len(split_dirs), split_name, env_num
+            )
+        )
 
-    logger.info("Copying test directories...")
-    for dir_name in test_dirs:
-        src = os.path.join(args.dataset_path, dir_name)
-        dst = os.path.join(args.test_data_path, dir_name)
-        copy_directory(src, dst, logger)
+        # Copy all models to env 0
+        env_0_path = os.path.join(base_path, "0")
+        for dir_name in split_dirs:
+            src = os.path.join(args.dataset_path, dir_name)
+            dst = os.path.join(env_0_path, dir_name)
+            copy_directory(src, dst, logger)
+
+        # Create symlinks from other envs to env 0
+        if env_num > 1:
+            for env_id in range(1, env_num):
+                env_path = os.path.join(base_path, str(env_id))
+                for dir_name in split_dirs:
+                    dst_link = os.path.join(env_path, dir_name)
+
+                    # Create relative symlink
+                    relative_src = os.path.join("..", "0", dir_name)
+                    if not os.path.exists(dst_link):
+                        os.symlink(relative_src, dst_link)
+                        logger.debug(
+                            "Symlinked {} -> {}".format(dst_link, relative_src)
+                        )
+                    else:
+                        logger.debug("Symlink already exists: {}".format(dst_link))
+
+    # Partition data for each split
+    partition_data_with_env(train_dirs, args.train_data_path, "train", logger)
+    partition_data_with_env(verify_dirs, args.verify_data_path, "verify", logger)
+    partition_data_with_env(test_dirs, args.test_data_path, "test", logger)
 
 
 # ============================================================================
@@ -177,9 +205,14 @@ if __name__ == "__main__":
     logger.info("=" * 60)
 
     # ── Splitting ─────────────────────────────────────────────────────────────
-    split_dataset(args, logger)
+    split_dataset(args, logger, args.env_num)
 
     # ── Done ──────────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info("DATASET SPLITTING DONE ✅")
+    logger.info("Final directory structure:")
+    logger.info("  data/train/0/, ..., data/train/{}/".format(args.env_num - 1))
+    logger.info("  data/verify/0/, ..., data/verify/{}/".format(args.env_num - 1))
+    logger.info("  data/test/0/, ..., data/test/{}/".format(args.env_num - 1))
+    logger.info("  (Envs 1+ use symlinks to env 0 to save disk space)")
     logger.info("=" * 60)
