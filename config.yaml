@@ -13,8 +13,8 @@ dataset:
 environment:
   view_num: 33
   observation_space_dim: 1024
-  is_vec_env: 0 # Set  1 if multi-core CPU is available for parallel environment execution, otherwise set 0
-  env_num: 1
+  is_vec_env: 1
+  env_num: 8
 
 # Training
 training:
