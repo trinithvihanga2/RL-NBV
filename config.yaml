@@ -41,11 +41,11 @@ training:
   pretrained:
     is_transform: 1
     model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
-    is_freeze_fe: 1
+    is_freeze_fe: 0
 
   # Replay Buffer
   replay_buffer:
-    is_load_replay_buffer: 1
+    is_load_replay_buffer: 0
     load_replay_buffer_path: ./artefacts/rbg/ideal_policy.pkl # Using the last generated replay buffer for training
     is_save_replay_buffer: 1
     save_replay_buffer_path: ./artefacts/train/dqn_replay_buffer.pkl
