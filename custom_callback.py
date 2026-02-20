@@ -34,6 +34,12 @@ class NextBestViewCustomCallback(BaseCallback):
     def _init_callback(self) -> None:
         if self.save_path:
             os.makedirs(self.save_path, exist_ok=True)
+        # Ensure output file parent exists so open(..., "a+") won't fail
+        if self.output_file:
+            try:
+                os.makedirs(os.path.dirname(self.output_file) or ".", exist_ok=True)
+            except Exception:
+                pass
         if not self.check_replay_buffer:
             return
         self.model.replay_buffer.sample(32, env=self.model._vec_normalize_env)

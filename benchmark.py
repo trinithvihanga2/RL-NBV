@@ -179,6 +179,11 @@ if __name__ == "__main__":
     shell_handle.setLevel(logging.DEBUG)
     logger.addHandler(shell_handle)
     if args.is_log == 1:
+        # Ensure parent directory exists so FileHandler won't crash
+        try:
+            os.makedirs(os.path.dirname(args.log_path) or ".", exist_ok=True)
+        except Exception:
+            pass
         file_handle = logging.FileHandler(args.log_path)
         file_handle.setFormatter(log_format)
         file_handle.setLevel(logging.DEBUG)

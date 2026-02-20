@@ -367,6 +367,16 @@ if __name__ == "__main__":
             print("  {:30s}: {}".format(arg, value))
         sys.exit(0)
 
+    # Ensure parent directories for log and output files exist to avoid crashes
+    try:
+        os.makedirs(os.path.dirname(args.log_file) or ".", exist_ok=True)
+    except Exception:
+        pass
+    try:
+        os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
+    except Exception:
+        pass
+
     # ── Logger ────────────────────────────────────────────────────────────────
     logger = setup_logger(args.log_file)
     logger.info("=" * 60)

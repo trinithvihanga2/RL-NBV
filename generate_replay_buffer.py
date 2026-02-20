@@ -56,6 +56,11 @@ def setup_logger(log_path="replay_buffer.log"):
     log_format = logging.Formatter(
         "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
     )
+    # Ensure parent directory exists so FileHandler won't crash
+    try:
+        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    except Exception:
+        pass
     file_handle = logging.FileHandler(log_path)
     file_handle.setFormatter(log_format)
     file_handle.setLevel(logging.DEBUG)
