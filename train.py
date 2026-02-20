@@ -284,7 +284,7 @@ def transfer_pretrained_weights(model, args, logger):
         )
         return model
 
-    checkpoint = torch.load(args.pretrained_model_path)
+    checkpoint = torch.load(args.pretrained_model_path , weights_only=False)
     pretrained_dict = checkpoint["model_state_dict"]
     qnet_dict = model.policy.q_net.state_dict()
     update_dict = copy.deepcopy(qnet_dict)
