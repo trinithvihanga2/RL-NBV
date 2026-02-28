@@ -957,6 +957,7 @@ dependencies = [
     { name = "stable-baselines3" },
     { name = "torch" },
     { name = "torchinfo" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -978,6 +979,7 @@ requires-dist = [
     { name = "stable-baselines3" },
     { name = "torch" },
     { name = "torchinfo" },
+    { name = "tqdm" },
 ]
 provides-extras = ["dev"]
 

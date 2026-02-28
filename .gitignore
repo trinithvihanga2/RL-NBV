@@ -19,7 +19,7 @@ dataset/
 # Logs and Artefacts
 *.log
 artefacts/
-checkpoints/
+
 
 # Pickles
 *.pkl
