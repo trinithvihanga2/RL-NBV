@@ -282,7 +282,7 @@ def transfer_pretrained_weights(model, args, logger):
         logger.error(
             "Pretrained model not found: {}".format(args.pretrained_model_path)
         )
-        return model
+        raise FileNotFoundError(f"Pretrained model not found: {args.pretrained_model_path}")
 
     checkpoint = torch.load(args.pretrained_model_path , weights_only=False)
     pretrained_dict = checkpoint["model_state_dict"]
@@ -312,7 +312,8 @@ def transfer_pretrained_weights(model, args, logger):
         )
     )
     if missing_keys:
-        logger.warning("Missing keys: {}".format(missing_keys))
+        logger.error("Missing keys: {}".format(missing_keys))
+        raise RuntimeError(f"Not all pretrained weights were transferred. Missing: {missing_keys}")
     return model
 
 
