@@ -6,8 +6,8 @@
 dataset:
   dataset_path: ./dataset
   train_data_path: ./data/train
-  verify_data_path: ./data/verify/0
-  test_data_path: ./data/test/0
+  verify_data_path: ./data/verify/
+  test_data_path: ./data/test/
 
 # Environment
 environment:
@@ -28,14 +28,14 @@ training:
     device: cuda:0
     learning_rate: 0.001
     batch_size: 128
-    buffer_size: 1000
+    buffer_size: 100000
     learning_starts: 3000
     exploration_fraction: 0.5
     exploration_final_eps: 0.2
     gradient_steps: 1
     train_freq: 16
     gamma: 0.1
-    total_steps: 1000
+    total_steps: 500000
 
   # Pretrained PointNet
   pretrained:
@@ -55,20 +55,20 @@ training:
     output_file: ./artefacts/train/train_result.txt
     checkpoint_path: ./artefacts/train/checkpoints
     final_model_path: ./artefacts/train/final
-    save_freq: 100
-    eval_freq: 100
+    save_freq: 10000
+    eval_freq: 10000
     is_save_model: 1
 
   # Logging
   logging:
     log_file: ./artefacts/train/train.log
-    coverage_log_freq_normal: 50
+    coverage_log_freq_normal: 50000
     coverage_log_freq_profile: 200
 
 # Replay Buffer Generation (Oracle Policy)
 replay_buffer_generation:
   step_size: 10
-  buffer_size: 10
+  buffer_size: 100000
   save_path: ./artefacts/rbg/ideal_policy.pkl
   log_path: ./artefacts/rbgreplay_buffer.log
   is_load_buffer: 0
