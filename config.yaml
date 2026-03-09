@@ -11,7 +11,7 @@ dataset:
 
 # Environment
 environment:
-  view_num: 33
+  view_num: 132
   observation_space_dim: 1024
   is_vec_env: 1
   env_num: 8  
