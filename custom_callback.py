@@ -50,19 +50,26 @@ class NextBestViewCustomCallback(BaseCallback):
         self.model.replay_buffer.sample(32, env=self.model._vec_normalize_env)
 
     def _on_step(self) -> bool:
+        eval_due_to_checkpoint = False
+
         # 1. Periodic Checkpoint
         if self.save_freq and self.n_calls % self.save_freq == 0:
             path = os.path.join(
                 self.save_path, f"rl_nbv_periodic_{self.num_timesteps}_steps"
             )
             self.model.save(path)
+            eval_due_to_checkpoint = True
             if self.verbose >= 1:
                 print(
                     f"[Checkpoint] Periodic save at step {self.num_timesteps} to {path}"
                 )
 
         # 2. Evaluation & Best Model Checkpoint
-        if self.n_calls % self.check_freq == 0:
+        eval_due_to_check_freq = bool(
+            self.check_freq and self.n_calls % self.check_freq == 0
+        )
+
+        if eval_due_to_checkpoint or eval_due_to_check_freq:
             with open(self.output_file, "a+", encoding="utf-8") as f:
                 f.write("------ {} ------\n".format(self.cnt))
             self.cnt += 1
@@ -156,6 +163,13 @@ class NextBestViewCustomCallback(BaseCallback):
                 )
 
         if self.verbose >= 1:
+            print(
+                "[Eval] average_coverage: "
+                + " ".join(
+                    "[{}]:{:.2f}".format(i + 1, average_coverage[i])
+                    for i in range(self.step_size)
+                )
+            )
             if avg_optimal_views is not None:
                 print(
                     "[Eval] optimal_view_count(target={:.2f}%): {:.2f} (reached_models={}/{})".format(
@@ -173,4 +187,4 @@ class NextBestViewCustomCallback(BaseCallback):
                     )
                 )
 
-        return average_coverage[9]
+        return average_coverage[self.step_size - 1]
