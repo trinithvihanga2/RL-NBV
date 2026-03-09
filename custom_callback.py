@@ -107,20 +107,70 @@ class NextBestViewCustomCallback(BaseCallback):
     def _caculate_average_coverage(self):
         model_size = self.test_env.shapenet_reader.model_num
         init_step = 0
-        average_coverage = np.zeros(10)
+        average_coverage = np.zeros(self.step_size)
+        target_coverage = float(self.test_env.terminated_coverage)
+        reached_view_counts = []
         for model_id in range(model_size):
             obs = self.test_env.reset(init_step=init_step)
             init_step = (init_step + 1) % self.test_env.view_num
-            average_coverage[0] += self.test_env.current_coverage
+            coverages = np.zeros(self.step_size)
+            coverages[0] = self.test_env.current_coverage
+            average_coverage[0] += coverages[0]
             for step_id in range(self.step_size - 1):
                 action, _states = self.model.predict(obs, deterministic=True)
                 obs, rewards, dones, info = self.test_env.step(action)
-                average_coverage[step_id + 1] += info["current_coverage"]
+                coverages[step_id + 1] = info["current_coverage"]
+                average_coverage[step_id + 1] += coverages[step_id + 1]
+
+            reached_indices = np.where(coverages >= target_coverage)[0]
+            if reached_indices.size > 0:
+                reached_view_counts.append(int(reached_indices[0] + 1))
+
         average_coverage = average_coverage / model_size
         average_coverage = average_coverage * 100
+
+        avg_optimal_views = None
+        if reached_view_counts:
+            avg_optimal_views = float(np.mean(reached_view_counts))
+
         with open(self.output_file, "a+", encoding="utf-8") as f:
             f.write("average_coverage: ")
             for i in range(self.step_size):
                 f.write("[{}]:{:.2f} ".format(i + 1, average_coverage[i]))
             f.write("\n")
+            if avg_optimal_views is not None:
+                f.write(
+                    "optimal_view_count(target={:.2f}%): {:.2f} (reached_models={}/{})\n".format(
+                        target_coverage * 100,
+                        avg_optimal_views,
+                        len(reached_view_counts),
+                        model_size,
+                    )
+                )
+            else:
+                f.write(
+                    "optimal_view_count(target={:.2f}%): not_reached (reached_models=0/{})\n".format(
+                        target_coverage * 100,
+                        model_size,
+                    )
+                )
+
+        if self.verbose >= 1:
+            if avg_optimal_views is not None:
+                print(
+                    "[Eval] optimal_view_count(target={:.2f}%): {:.2f} (reached_models={}/{})".format(
+                        target_coverage * 100,
+                        avg_optimal_views,
+                        len(reached_view_counts),
+                        model_size,
+                    )
+                )
+            else:
+                print(
+                    "[Eval] optimal_view_count(target={:.2f}%): not_reached (reached_models=0/{})".format(
+                        target_coverage * 100,
+                        model_size,
+                    )
+                )
+
         return average_coverage[9]

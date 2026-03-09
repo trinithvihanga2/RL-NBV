@@ -159,24 +159,53 @@ def log_gpu_memory(logger, tag=""):
 def caculate_average_coverage(env, model, step_size, output_file, logger):
     model_size = env.shapenet_reader.model_num
     average_coverage = np.zeros(step_size)
+    target_coverage = float(env.terminated_coverage)
+    reached_view_counts = []
     init_step = 0
     logger.info("Calculating average coverage over {} models...".format(model_size))
 
     for model_id in range(model_size):
         obs = env.reset(init_step=init_step)
         init_step = (init_step + 1) % env.view_num
-        average_coverage[0] += env.current_coverage
+        coverages = np.zeros(step_size)
+        coverages[0] = env.current_coverage
+        average_coverage[0] += coverages[0]
         for step_id in range(step_size - 1):
             action, _states = model.predict(obs, deterministic=True)
             obs, rewards, dones, info = env.step(action)
-            average_coverage[step_id + 1] += info["current_coverage"]
+            coverages[step_id + 1] = info["current_coverage"]
+            average_coverage[step_id + 1] += coverages[step_id + 1]
+
+        reached_indices = np.where(coverages >= target_coverage)[0]
+        if reached_indices.size > 0:
+            reached_view_counts.append(int(reached_indices[0] + 1))
 
     average_coverage = (average_coverage / model_size) * 100
+    avg_optimal_views = None
+    if reached_view_counts:
+        avg_optimal_views = float(np.mean(reached_view_counts))
+
     with open(output_file, "a+", encoding="utf-8") as f:
         f.write("average_coverage: ")
         for i in range(step_size):
             f.write("[{}]:{:.2f} ".format(i + 1, average_coverage[i]))
         f.write("\n")
+        if avg_optimal_views is not None:
+            f.write(
+                "optimal_view_count(target={:.2f}%): {:.2f} (reached_models={}/{})\n".format(
+                    target_coverage * 100,
+                    avg_optimal_views,
+                    len(reached_view_counts),
+                    model_size,
+                )
+            )
+        else:
+            f.write(
+                "optimal_view_count(target={:.2f}%): not_reached (reached_models=0/{})\n".format(
+                    target_coverage * 100,
+                    model_size,
+                )
+            )
 
     logger.info(
         "Average coverage: "
@@ -184,6 +213,22 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
             "[{}]:{:.2f}".format(i + 1, average_coverage[i]) for i in range(step_size)
         )
     )
+    if avg_optimal_views is not None:
+        logger.info(
+            "Optimal view count (target={:.2f}%): {:.2f} (reached_models={}/{})".format(
+                target_coverage * 100,
+                avg_optimal_views,
+                len(reached_view_counts),
+                model_size,
+            )
+        )
+    else:
+        logger.info(
+            "Optimal view count (target={:.2f}%): not reached (reached_models=0/{})".format(
+                target_coverage * 100,
+                model_size,
+            )
+        )
     return average_coverage
 
 
