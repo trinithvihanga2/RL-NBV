@@ -104,21 +104,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.observation_space_dim = observation_space_dim
         self.is_normalize = is_normalize
         if observation_space_dim == -1:
-            # for debug
-            # self.observation_space = spaces.Dict(
-            #     {
-            #         "current_point_cloud": spaces.Box(
-            #             low=float("-inf"),
-            #             high=float("inf"),
-            #             shape=(512, 3),
-            #             dtype=np.float64,
-            #         ),
-            #         "view_state": spaces.Box(
-            #             low=0, high=1, shape=(view_num,), dtype=np.int32
-            #         ),
-            #     }
-            # )
-            # Updated to inject per-view radius metadata so policy receives geometry + acquisition context.
             self.observation_space = spaces.Dict(
                 {
                     "current_point_cloud": spaces.Box(
@@ -140,20 +125,6 @@ class PointCloudNextBestViewEnv(gym.Env):
             )
         else:
             if self.is_normalize:
-                # self.observation_space = spaces.Dict(
-                #     {
-                #         "current_point_cloud": spaces.Box(
-                #             low=float("-1"),
-                #             high=float("1"),
-                #             shape=(3, observation_space_dim),
-                #             dtype=np.float64,
-                #         ),
-                #         "view_state": spaces.Box(
-                #             low=0, high=1, shape=(view_num,), dtype=np.int32
-                #         ),
-                #     }
-                # )
-                # Updated to include view_radius in normalized observation mode.
                 self.observation_space = spaces.Dict(
                     {
                         "current_point_cloud": spaces.Box(
@@ -174,20 +145,6 @@ class PointCloudNextBestViewEnv(gym.Env):
                     }
                 )
             else:
-                # self.observation_space = spaces.Dict(
-                #     {
-                #         "current_point_cloud": spaces.Box(
-                #             low=float("-inf"),
-                #             high=float("inf"),
-                #             shape=(3, observation_space_dim),
-                #             dtype=np.float64,
-                #         ),
-                #         "view_state": spaces.Box(
-                #             low=0, high=1, shape=(view_num,), dtype=np.int32
-                #         ),
-                #     }
-                # )
-                # Updated to include view_radius in non-normalized observation mode.
                 self.observation_space = spaces.Dict(
                     {
                         "current_point_cloud": spaces.Box(
