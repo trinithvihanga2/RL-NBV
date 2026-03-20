@@ -29,7 +29,10 @@ def config_to_args(config):
         # Dataset
         "train_data_path": ds.get("train_data_path"),
         # Environment
-        "view_num": env.get("view_num", 33),
+        # "view_num": env.get("view_num", 33),
+        # Updated default to 132 (33 views x 4 radii).
+        "view_num": env.get("view_num", 132),
+        "view_metadata_path": env.get("view_metadata_path", None),
         "observation_space_dim": env.get("observation_space_dim", 1024),
         "env_num": env.get("env_num", 1),
         # Replay Buffer Generation
@@ -83,6 +86,7 @@ def make_env(data_path, env_id, args, logger):
             env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
                 data_path=data_path,
                 view_num=args.view_num,
+                view_metadata_path=args.view_metadata_path,
                 observation_space_dim=args.observation_space_dim,
                 log_level=logging.INFO,
                 is_ratio_reward=(args.is_ratio_reward == 1),
@@ -94,6 +98,7 @@ def make_env(data_path, env_id, args, logger):
             env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
                 data_path=data_path,
                 view_num=args.view_num,
+                view_metadata_path=args.view_metadata_path,
                 observation_space_dim=args.observation_space_dim,
                 env_id=env_id,
                 log_level=logging.INFO,
@@ -106,6 +111,7 @@ def make_env(data_path, env_id, args, logger):
             env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
                 data_path=data_path,
                 view_num=args.view_num,
+                view_metadata_path=args.view_metadata_path,
                 observation_space_dim=args.observation_space_dim,
                 env_id=env_id,
                 log_level=logging.INFO,
@@ -235,6 +241,12 @@ if __name__ == "__main__":
                     )
             if np.any(np.isnan(last_obs["view_state"])):
                 logger.error("view_state has nan")
+                for env_id in range(args.env_num):
+                    logger.error(
+                        "model name: {}".format(env_vec.envs[env_id].model_name)
+                    )
+            if np.any(np.isnan(last_obs["view_radius"])):
+                logger.error("view_radius has nan")
                 for env_id in range(args.env_num):
                     logger.error(
                         "model name: {}".format(env_vec.envs[env_id].model_name)

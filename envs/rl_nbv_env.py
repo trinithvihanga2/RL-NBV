@@ -500,8 +500,9 @@ class PointCloudNextBestViewEnv(gym.Env):
     def _get_terminated(self):
         if self.step_cnt > self.max_step:
             return True
-        else:
-            return False
+        if self.current_coverage >= self.terminated_coverage:
+            return True
+        return False
 
     def _get_info(self):
         return {

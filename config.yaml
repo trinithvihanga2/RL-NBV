@@ -16,6 +16,7 @@ environment:
   view_num: 132
   view_metadata_path: ./tools/render/viewspace_shapenet_132_metadata.json
   observation_space_dim: 1024
+  terminated_coverage: 0.97
   is_vec_env: 1
   env_num: 8  
 

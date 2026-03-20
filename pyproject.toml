@@ -12,6 +12,7 @@ dependencies = [
     "imath",
     "mathutils",
     "matplotlib",
+    "ninja",
     "numpy",
     "open3d",
     "shimmy",

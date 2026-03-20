@@ -134,8 +134,6 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
 
     for model_id in range(model_size):
         obs = env.reset(init_step=init_step)
-        # init_step = (init_step + 1) % 33
-        # Updated to follow configured action-space size.
         init_step = (init_step + 1) % env.view_num
         average_coverage[0] += env.current_coverage
 
