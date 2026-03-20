@@ -83,7 +83,6 @@ class NextBestViewCustomCallback(BaseCallback):
         init_step = 0
         for model_id in range(model_size):
             obs = self.verify_env.reset(init_step=init_step)
-            # init_step = (init_step + 1) % 33
             # Updated to match configurable action space size.
             init_step = (init_step + 1) % self.verify_env.view_num
             with open(self.output_file, "a+", encoding="utf-8") as f:
@@ -109,12 +108,10 @@ class NextBestViewCustomCallback(BaseCallback):
     def _caculate_average_coverage(self):
         model_size = self.test_env.shapenet_reader.model_num
         init_step = 0
-        # average_coverage = np.zeros(10)
         # Updated to respect configured evaluation horizon.
         average_coverage = np.zeros(self.step_size)
         for model_id in range(model_size):
             obs = self.test_env.reset(init_step=init_step)
-            # init_step = (init_step + 1) % 33
             # Updated to match configurable action space size.
             init_step = (init_step + 1) % self.test_env.view_num
             average_coverage[0] += self.test_env.current_coverage

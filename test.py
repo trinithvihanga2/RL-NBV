@@ -55,7 +55,6 @@ def config_to_args(config):
         "train_data_path":           ds.get("train_data_path"),
         "verify_data_path":          ds.get("verify_data_path"),
         "test_data_path":            ds.get("test_data_path"),
-        # "view_num":                  env.get("view_num", 33),
         # Updated default to 132 (33 views x 4 radii).
         "view_num":                  env.get("view_num", 132),
         "view_metadata_path":        env.get("view_metadata_path", None),
@@ -134,7 +133,6 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
 
     for model_id in range(model_size):
         obs = env.reset(init_step=init_step)
-        # init_step = (init_step + 1) % 33
         # Updated to follow configured action-space size.
         init_step = (init_step + 1) % env.view_num
         average_coverage[0] += env.current_coverage
@@ -226,7 +224,6 @@ if __name__ == "__main__":
     # Load trained DQN
     policy_kwargs = dict(
         features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
-        # features_extractor_kwargs=dict(features_dim=128),
         # Updated: dynamic latent size required when concatenating view_state + view_radius.
         features_extractor_kwargs=dict(features_dim=args.policy_features_dim),
         optimizer_class=optim.adamw.AdamW,

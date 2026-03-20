@@ -98,7 +98,6 @@ class PointNetFeatureExtraction(BaseFeaturesExtractor):
         self.fc2 = nn.Linear(512, 256)
         self.bn2 = nn.BatchNorm1d(256)
         self.drop2 = nn.Dropout(0.4)
-        # self.fc3 = nn.Linear(256, features_dim - 33)
         # Updated to support arbitrary action-space size and include per-view radius metadata.
         state_meta_dim = self.view_num * 2  # view_state + view_radius
         if features_dim <= state_meta_dim:
@@ -123,7 +122,6 @@ class PointNetFeatureExtraction(BaseFeaturesExtractor):
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
         x = F.softmax(x, -1)
-        # x = torch.cat([x, viewstate], dim=1)
         # Updated to concatenate radius metadata so the policy learns coverage-detail trade-offs.
         x = torch.cat([x, viewstate.float(), viewradius.float()], dim=1)
         return x

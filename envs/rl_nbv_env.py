@@ -226,7 +226,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         dist2 = dist2.cpu().numpy()
         cover_flag = dist2 < self.COVERAGE_THRESHOLD
         # cover_flag = cover_flag[0, :]
-        cover_add = np.sum(cover_flag == True)
+        cover_add = np.sum(cover_flag)
         cover_add = cover_add / self.ground_truth_points_cloud_size
         self.current_coverage += cover_add
         self.coverage_add = cover_add
@@ -297,7 +297,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         dist2 = dist2.cpu().numpy()
         cover_flag = dist2 < self.COVERAGE_THRESHOLD
         # cover_flag = cover_flag[0, :]
-        cover_add = np.sum(cover_flag == True)
+        cover_add = np.sum(cover_flag)
         cover_add = cover_add / self.ground_truth_points_cloud_size
         return cover_add
 
@@ -350,7 +350,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         dist2 = dist2.cpu().numpy()
         cover_flag = dist2 < self.COVERAGE_THRESHOLD
         # cover_flag = cover_flag[0, :]
-        coverage = np.sum(cover_flag == True)
+        coverage = np.sum(cover_flag)
         coverage = coverage / self.ground_truth_points_cloud_size
 
         # Points that have already been covered will no longer be counted repeatedly
@@ -369,7 +369,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         return coverage
 
     def _get_reward(self, cover_add, action):
-        if self.is_reward_with_cur_coverage == True:
+        if self.is_reward_with_cur_coverage:
             if self.step_cnt < 4:
                 return cover_add * 10
             else:
@@ -393,7 +393,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         if self.observation_space_dim == -1:
             # do not downsample, just for debug
             cur_pc = self.current_points_cloud_from_gt.T
-            # return {"current_point_cloud": cur_pc, "view_state": self.view_state}
             # Updated to return radius metadata per view alongside existing inputs.
             return {
                 "current_point_cloud": cur_pc,
@@ -411,7 +410,6 @@ class PointCloudNextBestViewEnv(gym.Env):
                 cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
             # for PC_NBV net
             cur_pc = cur_pc.T
-            # return {"current_point_cloud": cur_pc, "view_state": self.view_state}
             # Updated to return radius metadata per view alongside existing inputs.
             return {
                 "current_point_cloud": cur_pc,
@@ -476,7 +474,7 @@ class PointCloudNextBestViewEnv(gym.Env):
 
     def _init_logger(self, env_id, log_level, is_print=False, is_log_file=True):
         log_path = None
-        if env_id == None:
+        if env_id is None:
             log_path = "env.log"
         else:
             log_path = "env_{}.log".format(env_id)
