@@ -1,6 +1,7 @@
 from typing import Optional
 import numpy as np
 import math
+import json
 import gym
 from gym import spaces
 import envs.shapenet_reader as shapenet_reader
@@ -44,7 +45,10 @@ class PointCloudNextBestViewEnv(gym.Env):
     def __init__(
         self,
         data_path,
-        view_num=33,
+        # view_num=33,
+        # Updated default: 33 views x 4 radii.
+        view_num=132,
+        view_metadata_path=None,
         begin_view=-1,
         observation_space_dim=-1,
         terminated_coverage=0.97,
@@ -75,6 +79,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             real_data_path, view_num, self.logger, True
         )
         self.view_state = np.zeros(view_num, dtype=np.int32)
+        self.view_radii = self._load_view_radii(view_num, view_metadata_path)
         self.view_num = view_num
         self.begin_view = begin_view
         self.max_step = max_step
@@ -100,6 +105,20 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.is_normalize = is_normalize
         if observation_space_dim == -1:
             # for debug
+            # self.observation_space = spaces.Dict(
+            #     {
+            #         "current_point_cloud": spaces.Box(
+            #             low=float("-inf"),
+            #             high=float("inf"),
+            #             shape=(512, 3),
+            #             dtype=np.float64,
+            #         ),
+            #         "view_state": spaces.Box(
+            #             low=0, high=1, shape=(view_num,), dtype=np.int32
+            #         ),
+            #     }
+            # )
+            # Updated to inject per-view radius metadata so policy receives geometry + acquisition context.
             self.observation_space = spaces.Dict(
                 {
                     "current_point_cloud": spaces.Box(
@@ -111,10 +130,30 @@ class PointCloudNextBestViewEnv(gym.Env):
                     "view_state": spaces.Box(
                         low=0, high=1, shape=(view_num,), dtype=np.int32
                     ),
+                    "view_radius": spaces.Box(
+                        low=0,
+                        high=np.finfo(np.float32).max,
+                        shape=(view_num,),
+                        dtype=np.float32,
+                    ),
                 }
             )
         else:
             if self.is_normalize:
+                # self.observation_space = spaces.Dict(
+                #     {
+                #         "current_point_cloud": spaces.Box(
+                #             low=float("-1"),
+                #             high=float("1"),
+                #             shape=(3, observation_space_dim),
+                #             dtype=np.float64,
+                #         ),
+                #         "view_state": spaces.Box(
+                #             low=0, high=1, shape=(view_num,), dtype=np.int32
+                #         ),
+                #     }
+                # )
+                # Updated to include view_radius in normalized observation mode.
                 self.observation_space = spaces.Dict(
                     {
                         "current_point_cloud": spaces.Box(
@@ -126,9 +165,29 @@ class PointCloudNextBestViewEnv(gym.Env):
                         "view_state": spaces.Box(
                             low=0, high=1, shape=(view_num,), dtype=np.int32
                         ),
+                        "view_radius": spaces.Box(
+                            low=0,
+                            high=np.finfo(np.float32).max,
+                            shape=(view_num,),
+                            dtype=np.float32,
+                        ),
                     }
                 )
             else:
+                # self.observation_space = spaces.Dict(
+                #     {
+                #         "current_point_cloud": spaces.Box(
+                #             low=float("-inf"),
+                #             high=float("inf"),
+                #             shape=(3, observation_space_dim),
+                #             dtype=np.float64,
+                #         ),
+                #         "view_state": spaces.Box(
+                #             low=0, high=1, shape=(view_num,), dtype=np.int32
+                #         ),
+                #     }
+                # )
+                # Updated to include view_radius in non-normalized observation mode.
                 self.observation_space = spaces.Dict(
                     {
                         "current_point_cloud": spaces.Box(
@@ -139,6 +198,12 @@ class PointCloudNextBestViewEnv(gym.Env):
                         ),
                         "view_state": spaces.Box(
                             low=0, high=1, shape=(view_num,), dtype=np.int32
+                        ),
+                        "view_radius": spaces.Box(
+                            low=0,
+                            high=np.finfo(np.float32).max,
+                            shape=(view_num,),
+                            dtype=np.float32,
                         ),
                     }
                 )
@@ -371,7 +436,13 @@ class PointCloudNextBestViewEnv(gym.Env):
         if self.observation_space_dim == -1:
             # do not downsample, just for debug
             cur_pc = self.current_points_cloud_from_gt.T
-            return {"current_point_cloud": cur_pc, "view_state": self.view_state}
+            # return {"current_point_cloud": cur_pc, "view_state": self.view_state}
+            # Updated to return radius metadata per view alongside existing inputs.
+            return {
+                "current_point_cloud": cur_pc,
+                "view_state": self.view_state,
+                "view_radius": self.view_radii,
+            }
         else:
             cur_pc = resample_pcd(
                 self.current_points_cloud_from_gt,
@@ -383,7 +454,48 @@ class PointCloudNextBestViewEnv(gym.Env):
                 cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
             # for PC_NBV net
             cur_pc = cur_pc.T
-            return {"current_point_cloud": cur_pc, "view_state": self.view_state}
+            # return {"current_point_cloud": cur_pc, "view_state": self.view_state}
+            # Updated to return radius metadata per view alongside existing inputs.
+            return {
+                "current_point_cloud": cur_pc,
+                "view_state": self.view_state,
+                "view_radius": self.view_radii,
+            }
+
+    def _load_view_radii(self, view_num, view_metadata_path):
+        if view_metadata_path is None:
+            self.logger.info("view_metadata_path not provided, using radius=1.0 fallback")
+            return np.ones(view_num, dtype=np.float32)
+
+        if not os.path.exists(view_metadata_path):
+            self.logger.error(
+                "view metadata file not found: {}. Using radius=1.0 fallback".format(
+                    view_metadata_path
+                )
+            )
+            return np.ones(view_num, dtype=np.float32)
+
+        try:
+            with open(view_metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except Exception as e:
+            self.logger.error(
+                "failed to parse view metadata: {}. Using radius=1.0 fallback".format(e)
+            )
+            return np.ones(view_num, dtype=np.float32)
+
+        radii = np.ones(view_num, dtype=np.float32)
+        views = metadata.get("views", [])
+        for item in views:
+            view_id = item.get("view_id", None)
+            radius = item.get("radius", None)
+            if view_id is None or radius is None:
+                continue
+            if 0 <= view_id < view_num:
+                radii[view_id] = float(radius)
+
+        self.logger.info("loaded view radius metadata from {}".format(view_metadata_path))
+        return radii
 
     def _get_terminated(self):
         if self.step_cnt > self.max_step:

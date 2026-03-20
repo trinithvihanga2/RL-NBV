@@ -55,11 +55,15 @@ def config_to_args(config):
         "train_data_path":           ds.get("train_data_path"),
         "verify_data_path":          ds.get("verify_data_path"),
         "test_data_path":            ds.get("test_data_path"),
-        "view_num":                  env.get("view_num", 33),
+        # "view_num":                  env.get("view_num", 33),
+        # Updated default to 132 (33 views x 4 radii).
+        "view_num":                  env.get("view_num", 132),
+        "view_metadata_path":        env.get("view_metadata_path", None),
         "observation_space_dim":     env.get("observation_space_dim", 1024),
         "is_vec_env":                env.get("is_vec_env", 0),
         "env_num":                   env.get("env_num", 8),
         "step_size":                 train.get("step_size", 10),
+        "policy_features_dim":       train.get("policy_features_dim", None),
         "is_ratio_reward":           train.get("is_ratio_reward", 1),
         "is_profile":                train.get("is_profile", 0),
         "resume":                    train.get("resume", 0),
@@ -130,7 +134,9 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
 
     for model_id in range(model_size):
         obs = env.reset(init_step=init_step)
-        init_step = (init_step + 1) % 33
+        # init_step = (init_step + 1) % 33
+        # Updated to follow configured action-space size.
+        init_step = (init_step + 1) % env.view_num
         average_coverage[0] += env.current_coverage
 
         for step_id in range(step_size - 1):
@@ -209,14 +215,20 @@ if __name__ == "__main__":
     test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.test_data_path,
         view_num=args.view_num,
+        view_metadata_path=args.view_metadata_path,
         observation_space_dim=args.observation_space_dim,
         log_level=logging.INFO,
     )
 
+    if args.policy_features_dim is None:
+        args.policy_features_dim = max(128, args.view_num * 2 + 64)
+
     # Load trained DQN
     policy_kwargs = dict(
         features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
-        features_extractor_kwargs=dict(features_dim=128),
+        # features_extractor_kwargs=dict(features_dim=128),
+        # Updated: dynamic latent size required when concatenating view_state + view_radius.
+        features_extractor_kwargs=dict(features_dim=args.policy_features_dim),
         optimizer_class=optim.adamw.AdamW,
     )
     model = stable_baselines3.DQN.load(

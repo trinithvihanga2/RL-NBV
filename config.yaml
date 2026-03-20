@@ -11,7 +11,10 @@ dataset:
 
 # Environment
 environment:
-  view_num: 33
+  # view_num: 33
+  # Updated: 33 Fibonacci directions × 4 radii = 132 action/views.
+  view_num: 132
+  view_metadata_path: ./tools/render/viewspace_shapenet_132_metadata.json
   observation_space_dim: 1024
   is_vec_env: 1
   env_num: 8  
@@ -22,6 +25,7 @@ training:
   is_ratio_reward: 1
   is_profile: 0
   resume: 1
+  policy_features_dim: 359
 
   # DQN Hyperparameters
   dqn:

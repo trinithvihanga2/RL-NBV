@@ -69,7 +69,10 @@ def config_to_args(config):
         "verify_data_path": ds.get("verify_data_path"),
         "test_data_path": ds.get("test_data_path"),
         # Environment
-        "view_num": env.get("view_num", 33),
+        # "view_num": env.get("view_num", 33),
+        # Updated default to 132 (33 views x 4 radii).
+        "view_num": env.get("view_num", 132),
+        "view_metadata_path": env.get("view_metadata_path", None),
         "observation_space_dim": env.get("observation_space_dim", 1024),
         "is_vec_env": env.get("is_vec_env", 0),
         "env_num": env.get("env_num", 8),
@@ -78,6 +81,7 @@ def config_to_args(config):
         "is_ratio_reward": train.get("is_ratio_reward", 1),
         "is_profile": train.get("is_profile", 0),
         "resume": train.get("resume", 0),
+        "policy_features_dim": train.get("policy_features_dim", None),
         # DQN
         "device": dqn.get("device", "cuda:0"),
         "learning_rate": dqn.get("learning_rate", 0.001),
@@ -163,7 +167,9 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
 
     for model_id in range(model_size):
         obs = env.reset(init_step=init_step)
-        init_step = (init_step + 1) % 33
+        # init_step = (init_step + 1) % 33
+        # Updated to follow configured action-space size instead of fixed 33.
+        init_step = (init_step + 1) % env.view_num
         average_coverage[0] += env.current_coverage
         for step_id in range(step_size - 1):
             action, _states = model.predict(obs, deterministic=True)
@@ -221,6 +227,7 @@ def make_env(data_path, env_id, args):
         env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
             data_path=data_path,
             view_num=args.view_num,
+            view_metadata_path=args.view_metadata_path,
             observation_space_dim=args.observation_space_dim,
             env_id=env_id,
             log_level=logging.INFO,
@@ -408,6 +415,10 @@ if __name__ == "__main__":
     logger.info("Total steps       : {}".format(total_steps))
     logger.info("Coverage log freq (eval) : {}".format(coverage_log_freq))
 
+    if args.policy_features_dim is None:
+        args.policy_features_dim = max(128, args.view_num * 2 + 64)
+    logger.info("Policy features dim : {}".format(args.policy_features_dim))
+
     # ── Environments ──────────────────────────────────────────────────────────
     logger.info("Building environments...")
     if args.is_vec_env:
@@ -420,6 +431,7 @@ if __name__ == "__main__":
         train_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
             data_path=args.train_data_path,
             view_num=args.view_num,
+            view_metadata_path=args.view_metadata_path,
             observation_space_dim=args.observation_space_dim,
             log_level=logging.INFO,
             is_ratio_reward=(args.is_ratio_reward == 1),
@@ -428,12 +440,14 @@ if __name__ == "__main__":
     verify_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.verify_data_path,
         view_num=args.view_num,
+        view_metadata_path=args.view_metadata_path,
         observation_space_dim=args.observation_space_dim,
         log_level=logging.INFO,
     )
     test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.test_data_path,
         view_num=args.view_num,
+        view_metadata_path=args.view_metadata_path,
         observation_space_dim=args.observation_space_dim,
         log_level=logging.INFO,
     )
@@ -443,7 +457,9 @@ if __name__ == "__main__":
     # ── Policy ────────────────────────────────────────────────────────────────
     policy_kwargs = dict(
         features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
-        features_extractor_kwargs=dict(features_dim=128),
+        # features_extractor_kwargs=dict(features_dim=128),
+        # Updated: dynamic latent size required when concatenating view_state + view_radius.
+        features_extractor_kwargs=dict(features_dim=args.policy_features_dim),
         optimizer_class=optim.adamw.AdamW,
     )
 
