@@ -66,7 +66,7 @@ def config_to_args(config):
         "is_ratio_reward": train.get("is_ratio_reward", 1),
         "is_profile": train.get("is_profile", 0),
         "resume": train.get("resume", 0),
-        "continuous_mode": env.get("continuous_mode", False),
+        "continuous_mode": True,
         "algorithm": train.get("algorithm", "DQN"),
         "device": dqn.get("device", "cuda:0"),
         "learning_rate": dqn.get("learning_rate", 0.001),
@@ -230,7 +230,6 @@ if __name__ == "__main__":
         observation_space_dim=args.observation_space_dim,
         log_level=logging.INFO,
         sun_position_config=args.sun_position_config,
-        continuous_mode=args.continuous_mode,
     )
 
     # Load trained model (DQN or PPO)

@@ -93,10 +93,7 @@ def config_to_args(config):
 
     # Add algorithm selection
     algorithm = train.get("algorithm", "DQN")  # Default to DQN
-    
-    # Add continuous mode config
-    continuous_mode = env.get("continuous_mode", False)
-    
+
     args = {
         # Dataset
         "train_data_path": ds.get("train_data_path"),
@@ -121,8 +118,6 @@ def config_to_args(config):
         "env_num": env.get("env_num", 8),
         "viewpoints_path": env["viewpoints_path"],
         "sun_position_config": env.get("sun_position", {}),
-        # NEW: Continuous mode parameter
-        "continuous_mode": continuous_mode,
         # Training
         "step_size": train.get("step_size", 10),
         "is_profile": train.get("is_profile", 0),
@@ -350,7 +345,6 @@ def make_env(data_path, env_id, logger_name, log_file, args):
             sun_position_config=args.sun_position_config,
             target_orbit_config=args.target_orbit_config,
             state_reward_config=args.state_reward_config,
-            continuous_mode=args.continuous_mode,
         )
         return env
 
@@ -631,7 +625,6 @@ if __name__ == "__main__":
         sun_position_config=args.sun_position_config,
         target_orbit_config=args.target_orbit_config,
         state_reward_config=args.state_reward_config,
-        continuous_mode=args.continuous_mode,
     )
     test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.test_data_path,
@@ -652,7 +645,6 @@ if __name__ == "__main__":
         sun_position_config=args.sun_position_config,
         target_orbit_config=args.target_orbit_config,
         state_reward_config=args.state_reward_config,
-        continuous_mode=args.continuous_mode,
     )
     logger.info("Environments ready ✅")
     log_gpu_memory(logger, tag="[after envs]")

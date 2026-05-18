@@ -65,7 +65,6 @@ def config_to_args(config):
         "is_ratio_reward": train.get("is_ratio_reward", 1),
         "output_file": out.get("output_file", "train_result.txt"),
         "log_file": log.get("log_file", "random_coverage.log"),
-        "continuous_mode": env.get("continuous_mode", False),
     }
 
 
@@ -73,7 +72,7 @@ def choose_action(env, sample_unvisited=True):
     if env.continuous_mode:
         # Continuous mode: just sample from action space
         return env.action_space.sample()
-    
+
     if not sample_unvisited:
         return env.action_space.sample()
 
@@ -222,7 +221,6 @@ if __name__ == "__main__":
         is_ratio_reward=(args.is_ratio_reward == 1),
         max_step=step_size,
         sun_position_config=args.sun_position_config,
-        continuous_mode=args.continuous_mode,
     )
 
     avg_per_step, avg_final = run_random_coverage(

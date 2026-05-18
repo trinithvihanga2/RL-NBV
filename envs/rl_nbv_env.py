@@ -3,7 +3,6 @@ import gym
 from gym import spaces
 import envs.shapenet_reader as shapenet_reader
 import open3d as o3d
-import random
 import torch
 import sys
 import os
@@ -13,12 +12,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from distance.chamfer_distance import ChamferDistanceFunction
 from envs.state_transition import (
     TargetOrbitConfig,
-    build_state,
     calculate_sun_position,
     compute_all_travel_times,
-    get_lit_visible_points,
-    orchestrate_step,
-    update_coverage_map,
     compute_delta_v_matrix,
     get_travel_time,
 )
@@ -74,13 +69,13 @@ def normalize_pc(points, logger, name):
 def random_position_on_sphere():
     """Generate random position on unit sphere using spherical coordinates."""
     theta = np.random.uniform(0, np.pi)  # Polar angle [0, pi]
-    phi = np.random.uniform(0, 2*np.pi)   # Azimuthal angle [0, 2pi]
+    phi = np.random.uniform(0, 2 * np.pi)  # Azimuthal angle [0, 2pi]
     r = 1.0  # Unit sphere
-    
+
     x = r * np.sin(theta) * np.cos(phi)
     y = r * np.sin(theta) * np.sin(phi)
     z = r * np.cos(theta)
-    
+
     return np.array([x, y, z], dtype=np.float32)
 
 
@@ -106,7 +101,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         sun_position_config=None,
         target_orbit_config=None,
         state_reward_config=None,
-        continuous_mode=False,
     ):
         """
         Initialize Point Cloud Next Best View Environment.
@@ -117,8 +111,6 @@ class PointCloudNextBestViewEnv(gym.Env):
                             Default 1.0: equal weight to coverage and time cost
                             Higher value: penalize time more heavily
                             Lower value: focus more on coverage
-            continuous_mode: If True, use continuous 3D action space (direction vector).
-                           If False, use discrete action space (viewpoint indices).
         """
         self.COVERAGE_THRESHOLD = 0.00005
         self.is_ratio_reward = is_ratio_reward
@@ -130,28 +122,17 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.cumulative_dv = 0.0
         self.sun_position_config = sun_position_config or {}
         self.terminated_coverage = terminated_coverage
-        self.continuous_mode = continuous_mode
-        
-        # Initialize CW dynamics for continuous mode
-        if self.continuous_mode:
-            from envs.state_transition.cw_utils import CWDynamics
-            # Will be initialized after orbit_config is set
-            self.cw = None
-        
-        # Set action space based on mode
-        if continuous_mode:
-            # Continuous action space: spherical coordinates (theta, phi)
-            # theta: polar angle [0, pi] (0 to 180 degrees)
-            # phi: azimuthal angle [0, 2pi] (0 to 360 degrees)
-            self.action_space = spaces.Box(
-                low=np.array([0.0, 0.0]), 
-                high=np.array([np.pi, 2*np.pi]), 
-                shape=(2,), 
-                dtype=np.float32
-            )
-        else:
-            # Discrete action space
-            self.action_space = spaces.Discrete(view_num)
+
+        from envs.state_transition.cw_utils import CWDynamics
+
+        self.cw = None
+
+        self.action_space = spaces.Box(
+            low=np.array([0.0, 0.0]),
+            high=np.array([np.pi, 2 * np.pi]),
+            shape=(2,),
+            dtype=np.float32,
+        )
         self.DEVICE = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -168,15 +149,10 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.view_num = view_num
         self.begin_view = begin_view
         self.max_step = max_step
-        if self.begin_view == -1:
-            self.current_view = random.randint(0, self.view_num - 1)
-            self.logger.info("random init view: {}".format(self.current_view))
-        else:
-            self.current_view = self.begin_view
-        self.action_history = [self.current_view]
-        self.current_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(
-            self.current_view
-        )
+        self.current_view = 0
+        self.action_history = []
+        self.current_position = random_position_on_sphere()
+        self.current_points_cloud = np.zeros((0, 3), dtype=np.float32)
         self.ground_truth_points_cloud = self.shapenet_reader.ground_truth
         self.ground_truth_points_cloud_size = self.ground_truth_points_cloud.shape[0]
         self.ground_truth_tensor = self.shapenet_reader.ground_truth[
@@ -188,113 +164,77 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.view_state[self.current_view] = 1
         self.observation_space_dim = observation_space_dim
         self.is_normalize = is_normalize
-        
-        # Initialize current position for continuous mode
-        if continuous_mode:
-            self.current_position = random_position_on_sphere()
-            self.current_time = 0.0
-        else:
-            self.current_time = 0.0
-        
-        # Set observation space based on mode
+        self.current_time = 0.0
+
         if observation_space_dim == -1:
-            # for debug
-            if continuous_mode:
-                self.observation_space = spaces.Dict(
-                    {
-                        "current_point_cloud": spaces.Box(
-                            low=float("-inf"),
-                            high=float("inf"),
-                            shape=(512, 3),
-                            dtype=np.float64,
-                        ),
-                        "camera_position": spaces.Box(
-                            low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-                        ),
-                        "coverage": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                        "fuel_remaining": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                        "time_remaining": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                    }
-                )
-            else:
-                self.observation_space = spaces.Dict(
-                    {
-                        "current_point_cloud": spaces.Box(
-                            low=float("-inf"),
-                            high=float("inf"),
-                            shape=(512, 3),
-                            dtype=np.float64,
-                        ),
-                        "view_state": spaces.Box(
-                            low=0, high=1, shape=(view_num,), dtype=np.int32
-                        ),
-                    }
-                )
+            self.observation_space = spaces.Dict(
+                {
+                    "current_point_cloud": spaces.Box(
+                        low=float("-inf"),
+                        high=float("inf"),
+                        shape=(512, 3),
+                        dtype=np.float64,
+                    ),
+                    "camera_position": spaces.Box(
+                        low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+                    ),
+                    "coverage": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                    "fuel_remaining": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                    "time_remaining": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                }
+            )
+        elif self.is_normalize:
+            self.observation_space = spaces.Dict(
+                {
+                    "current_point_cloud": spaces.Box(
+                        low=float("-1"),
+                        high=float("1"),
+                        shape=(3, observation_space_dim),
+                        dtype=np.float64,
+                    ),
+                    "camera_position": spaces.Box(
+                        low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+                    ),
+                    "coverage": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                    "fuel_remaining": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                    "time_remaining": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                }
+            )
         else:
-            if self.is_normalize:
-                if continuous_mode:
-                    self.observation_space = spaces.Dict(
-                        {
-                            "current_point_cloud": spaces.Box(
-                                low=float("-1"),
-                                high=float("1"),
-                                shape=(3, observation_space_dim),
-                                dtype=np.float64,
-                            ),
-                            "camera_position": spaces.Box(
-                                low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-                            ),
-                            "coverage": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                            "fuel_remaining": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                            "time_remaining": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                        }
-                    )
-                else:
-                    self.observation_space = spaces.Dict(
-                        {
-                            "current_point_cloud": spaces.Box(
-                                low=float("-1"),
-                                high=float("1"),
-                                shape=(3, observation_space_dim),
-                                dtype=np.float64,
-                            ),
-                            "view_state": spaces.Box(
-                                low=0, high=1, shape=(view_num,), dtype=np.int32
-                            ),
-                        }
-                    )
-            else:
-                if continuous_mode:
-                    self.observation_space = spaces.Dict(
-                        {
-                            "current_point_cloud": spaces.Box(
-                                low=float("-inf"),
-                                high=float("inf"),
-                                shape=(3, observation_space_dim),
-                                dtype=np.float64,
-                            ),
-                            "camera_position": spaces.Box(
-                                low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-                            ),
-                            "coverage": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                            "fuel_remaining": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                            "time_remaining": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                        }
-                    )
-                else:
-                    self.observation_space = spaces.Dict(
-                        {
-                            "current_point_cloud": spaces.Box(
-                                low=float("-inf"),
-                                high=float("inf"),
-                                shape=(3, observation_space_dim),
-                                dtype=np.float64,
-                            ),
-                            "view_state": spaces.Box(
-                                low=0, high=1, shape=(view_num,), dtype=np.int32
-                            ),
-                        }
-                    )
+            self.observation_space = spaces.Dict(
+                {
+                    "current_point_cloud": spaces.Box(
+                        low=float("-inf"),
+                        high=float("inf"),
+                        shape=(3, observation_space_dim),
+                        dtype=np.float64,
+                    ),
+                    "camera_position": spaces.Box(
+                        low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+                    ),
+                    "coverage": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                    "fuel_remaining": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                    "time_remaining": spaces.Box(
+                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
+                    ),
+                }
+            )
         self.current_coverage = 0.0
         self.coverage_add = 0.0
         self.step_cnt = 1
@@ -349,11 +289,8 @@ class PointCloudNextBestViewEnv(gym.Env):
             self.orbit_config.grav_param,
             self.orbit_config.num_orbits,
         )
-        
-        # Initialize CW dynamics for continuous mode after orbit_config is set
-        if self.continuous_mode:
-            from envs.state_transition.cw_utils import CWDynamics
-            self.cw = CWDynamics(self.orbit_config.mean_motion)
+
+        self.cw = CWDynamics(self.orbit_config.mean_motion)
 
         # Precompute travel times between all pairs of viewpoints
         # Shape: (view_num, view_num) where [i,j] = travel time from view i to view j
@@ -419,12 +356,10 @@ class PointCloudNextBestViewEnv(gym.Env):
         self._model_transition_cache = {}
         self._mesh_cache = {}
         self._initialize_state_transition_for_current_model(self.current_view)
-        
-        # Initialize coverage map for continuous mode
-        if self.continuous_mode:
-            self._coverage_map = np.zeros(
-                self.ground_truth_points_cloud_size, dtype=bool
-            )
+        self.current_points_cloud = self._get_points_from_position(
+            self.current_position
+        )
+        self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
     def _estimate_surface_normals(self, points):
         if points.shape[0] == 0:
@@ -505,164 +440,46 @@ class PointCloudNextBestViewEnv(gym.Env):
             "travel_times_matrix": self.travel_times,
             "visible_points_by_view": cached_geometry["visible_points_by_view"],
         }
-
-        # Continuous mode: cache canonical tensor for efficient coverage updates
-        if self.continuous_mode:
-            self._canonical_tensor = torch.tensor(
-                self._canonical_points[np.newaxis, :, :].astype(np.float32)
-            ).to(self.DEVICE)
-            return
-
-        # --- discrete-only state below ---
-        initial_visible_lit = get_lit_visible_points(
-            action=int(initial_view),
-            new_sun_position=self.current_sun_position,
-            geometry_cache=self.geometry_cache,
-        )
-        initial_coverage = update_coverage_map(
-            prev_coverage_map=np.zeros(self.ground_truth_points_cloud_size, dtype=bool),
-            visible_lit_points=initial_visible_lit,
-            total_points=self.ground_truth_points_cloud_size,
-        )
-
-        if self.travel_times is not None:
-            current_travel_times = self.travel_times[int(initial_view)]
-        else:
-            current_travel_times = np.zeros(self.view_num, dtype=np.float32)
-
-        self._transition_state = build_state(
-            action=int(initial_view),
-            new_time=self.current_time,
-            new_sun_position=self.current_sun_position,
-            new_coverage_map=initial_coverage.coverage_map,
-            prev_views=np.zeros(self.view_num, dtype=bool),
-            travel_times=current_travel_times,
-        )
-
-        self.view_state = self._transition_state["views"].astype(np.int32)
-        self.current_coverage = float(np.sum(initial_coverage.coverage_map)) / float(
-            max(self.ground_truth_points_cloud_size, 1)
-        )
-        self.coverage_add = initial_coverage.newly_covered_ratio
-        self._sync_legacy_coverage_buffers()
+        self._canonical_tensor = torch.tensor(
+            self._canonical_points[np.newaxis, :, :].astype(np.float32)
+        ).to(self.DEVICE)
+        self._coverage_map = np.zeros(self.ground_truth_points_cloud_size, dtype=bool)
+        self.current_coverage = 0.0
+        self.coverage_add = 0.0
+        self.ground_truth_points_cloud = self._canonical_points
+        self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
     def step(self, action):
-        if self.continuous_mode:
-            return self._step_continuous(action)
-        else:
-            return self._step_discrete(action)
-
-    def _step_discrete(self, action):
-        action = int(action)
-        previous_state = self._transition_state
-        was_visited = bool(previous_state["views"][action])
-        prev_view = int(previous_state["_current_view"])
-
-        delta_v = 0.0
-        if self.delta_v_matrix is not None:
-            delta_v = float(self.delta_v_matrix[prev_view, action])
-
-        step_result = orchestrate_step(
-            action=action,
-            current_state=previous_state,
-            orbit_config=self.orbit_config,
-            geometry_cache=self.geometry_cache,
-            orbital_params=self.sun_orbital_params,
-            reward_config=self.reward_config,
-            total_points=self.ground_truth_points_cloud_size,
-        )
-
-        self._transition_state = step_result.next_state
-        self.current_view = int(self._transition_state["_current_view"])
-        self.current_time = float(self._transition_state["_current_time"])
-        self.current_sun_position = self._transition_state["sun_position"].copy()
-        self.view_state = self._transition_state["views"].astype(np.int32)
-        self.coverage_add = step_result.coverage_update.newly_covered_ratio
-        self.current_coverage = float(
-            np.sum(self._transition_state["coverage_map"])
-        ) / float(max(self.ground_truth_points_cloud_size, 1))
-
-        if not was_visited:
-            selected_view_points = self.shapenet_reader.get_point_cloud_by_view_id(
-                action
-            )
-            if selected_view_points is not None and selected_view_points.shape[0] > 0:
-                self.current_points_cloud = np.append(
-                    self.current_points_cloud, selected_view_points, axis=0
-                )
-
-        self._sync_legacy_coverage_buffers()
-        self.action_history.append(action)
-        self.step_cnt += 1
-        self.cumulative_dv += delta_v
-
-        observation = self._get_observation_space()
-        terminated = self._get_terminated()
-        info = self._get_info()
-
-        reward = self._get_reward(
-            cover_add=self.coverage_add,
-            action=action,
-            travel_time=step_result.travel_time,
-            delta_v=delta_v,
-        )
-
-        info["travel_time"] = step_result.travel_time
-        info["delta_v"] = delta_v
-        info["mission_time"] = self.current_time
-        info["mission_time_horizon"] = self.orbit_config.total_time
-        info["reward_breakdown"] = step_result.reward_breakdown
-        info["newly_covered_count"] = step_result.coverage_update.newly_covered_count
-
-        if self.coverage_add == 1:
-            self.logger.error("cover_add is 1")
-            self._get_debug_info()
-
-        log_label = "REVISIT" if was_visited else "SUCCESS"
-        self.logger.debug(
-            "[step] {} | action: {:2d}, travel_time: {:.6f}, time: {:.6f}/{:.6f}, cover_add: {:.2f}, "
-            "cur_cover: {:.2f}, step_cnt: {:2d}, terminated: {}".format(
-                log_label,
-                action,
-                step_result.travel_time,
-                self.current_time,
-                self.orbit_config.total_time,
-                self.coverage_add * 100,
-                self.current_coverage * 100,
-                self.step_cnt,
-                terminated,
-            )
-        )
-        return observation, reward, terminated, info
+        return self._step_continuous(action)
 
     def _step_continuous(self, action):
         # action: spherical coordinates [theta, phi]
         # theta: polar angle [0, pi] (0 to 180 degrees)
         # phi: azimuthal angle [0, 2pi] (0 to 360 degrees)
         theta, phi = action[0], action[1]
-        
+
         # Convert spherical to Cartesian coordinates
         r = self.orbit_config.orbit_radius
         x = r * np.sin(theta) * np.cos(phi)
         y = r * np.sin(theta) * np.sin(phi)
         z = r * np.cos(theta)
         new_position = np.array([x, y, z], dtype=np.float32)
-        
+
         # 2. Compute travel time
         travel_time = get_travel_time(
             self.current_position, new_position, self.orbit_config
         )
-        
+
         # 3. Compute Δv via CW dynamics (using pre-initialized instance)
         r0 = self.current_position
         rf = new_position
         delta_v, _, _ = self.cw.compute_delta_v(r0, rf, travel_time)
         if delta_v == np.inf:
             delta_v = self.max_delta_v  # fallback for singular transfers
-        
+
         # 4. Get visible points from new position (nearest view approximation)
         new_view_points = self._get_points_from_position(new_position)
-        
+
         # 5. Update coverage
         self.current_points_cloud = np.append(
             self.current_points_cloud, new_view_points, axis=0
@@ -670,19 +487,17 @@ class PointCloudNextBestViewEnv(gym.Env):
         # Cap point cloud size to prevent unbounded growth
         if self.current_points_cloud.shape[0] > MAX_CLOUD_SIZE:
             idx = np.random.choice(
-                self.current_points_cloud.shape[0], 
-                MAX_CLOUD_SIZE, 
-                replace=False
+                self.current_points_cloud.shape[0], MAX_CLOUD_SIZE, replace=False
             )
             self.current_points_cloud = self.current_points_cloud[idx]
         coverage_gain = self._update_coverage(new_view_points)
-        
+
         # 6. Update state
         self.current_position = new_position
         self.current_time += travel_time
         self.cumulative_dv += delta_v
         self.step_cnt += 1
-        
+
         # 7. Compute reward using _get_reward for consistency
         reward = self._get_reward(
             cover_add=coverage_gain,
@@ -690,13 +505,13 @@ class PointCloudNextBestViewEnv(gym.Env):
             travel_time=travel_time,
             delta_v=delta_v,
         )
-        
+
         # 8. Check termination using _get_terminated for consistency
         terminated = self._get_terminated()
-        
+
         observation = self._get_observation_space()
         info = self._get_info(travel_time, delta_v)
-        
+
         return observation, reward, terminated, info
 
     # for greedy policy test
@@ -706,59 +521,27 @@ class PointCloudNextBestViewEnv(gym.Env):
         # ============================================================================
         # This method tests the value of an action without committing to it.
         # Used for greedy policy evaluation and planning.
-        if self.continuous_mode:
-            raise NotImplementedError("try_step is not supported in continuous mode")
-        action = int(action)
-        if self._transition_state is None:
-            return 0
-        if bool(self._transition_state["views"][action]):
-            return 0
-
-        result = orchestrate_step(
-            action=action,
-            current_state=self._transition_state,
-            orbit_config=self.orbit_config,
-            geometry_cache=self.geometry_cache,
-            orbital_params=self.sun_orbital_params,
-            reward_config=self.reward_config,
-            total_points=self.ground_truth_points_cloud_size,
-        )
-        return result.coverage_update.newly_covered_ratio
+        raise NotImplementedError("try_step is not supported in continuous mode")
 
     def reset(self, init_step=-1):
         self.shapenet_reader.get_next_model()
         self.action_history.clear()
         self.step_cnt = 1
         self.model_name = self.shapenet_reader.get_model_info()
-        
+
         # Reset mission time and fuel
         self.current_time = 0.0
         self.cumulative_dv = 0.0
         self.logger.debug(
             f"[reset] Mission time reset to 0.0. Horizon: {self.orbit_config.total_time:.6f} time units"
         )
-        
-        if self.continuous_mode:
-            # Random initial position
-            self.current_position = random_position_on_sphere()
-            self.current_view = 0  # Not used in continuous mode, placeholder
-        else:
-            # Existing discrete reset logic
-            if self.begin_view == -1:
-                self.current_view = random.randint(0, self.view_num - 1)
-            else:
-                self.current_view = self.begin_view
-            if init_step != -1:
-                self.current_view = init_step
-            self.action_history.append(self.current_view)
-            self.current_points_cloud = self.shapenet_reader.get_point_cloud_by_view_id(
-                self.current_view
-            )
-            self.view_state = np.zeros(self.view_num, dtype=np.int32)
+
+        self.current_position = random_position_on_sphere()
+        self.current_view = 0
 
         # Re-initialize and synchronize sun direction with reset mission time.
         self.current_sun_position = calculate_sun_position(
-            action=self.current_view if not self.continuous_mode else 0,
+            action=0,
             new_time=self.current_time,
             prev_sun_position=self.initial_sun_position,
             orbital_params=self.sun_orbital_params,
@@ -774,19 +557,12 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self._initialize_state_transition_for_current_model(self.current_view)
 
-        # Reset coverage map for continuous mode after model size is known
-        if self.continuous_mode:
-            self._coverage_map = np.zeros(
-                self.ground_truth_points_cloud_size, dtype=bool
-            )
-            self.current_coverage = 0.0
-            self.coverage_add = 0.0
-            self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
-            # Load initial point cloud after _canonical_points is updated for new model
-            self.current_points_cloud = self._get_points_from_position(self.current_position)
+        self.current_points_cloud = self._get_points_from_position(
+            self.current_position
+        )
 
         observation = self._get_observation_space()
-        info = self._get_info()
+        self._get_info()
         self.logger.debug("[reset] pass, init step: {}".format(self.current_view))
         return observation
 
@@ -797,13 +573,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         pass
 
     def _caculate_current_coverage(self):
-        if self._transition_state is None:
-            return 0.0
-        coverage = float(np.sum(self._transition_state["coverage_map"])) / float(
-            max(self.ground_truth_points_cloud_size, 1)
-        )
-        self._sync_legacy_coverage_buffers()
-        return coverage
+        return self.current_coverage
 
     def _get_reward(self, cover_add, action, travel_time=0.0, delta_v=0.0):
         """
@@ -878,40 +648,9 @@ class PointCloudNextBestViewEnv(gym.Env):
         return final_reward
 
     def _get_observation_space(self):
-        if self.continuous_mode:
-            return self._get_observation_space_continuous()
-        else:
-            return self._get_observation_space_discrete()
-
-    def _get_observation_space_discrete(self):
-        if self.observation_space_dim == -1:
-            # do not downsample, just for debug
-            source_pc = self.current_points_cloud_from_gt
-            if source_pc.shape[0] == 0:
-                source_pc = self.current_points_cloud
-            cur_pc = source_pc.T
-            return {"current_point_cloud": cur_pc, "view_state": self.view_state}
-        else:
-            source_pc = self.current_points_cloud_from_gt
-            if source_pc.shape[0] == 0:
-                source_pc = self.current_points_cloud
-            cur_pc = resample_pcd(
-                source_pc,
-                self.observation_space_dim,
-                self.logger,
-                self.model_name,
-            )
-            if self.is_normalize:
-                cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
-            # for PC_NBV net
-            cur_pc = cur_pc.T
-            return {"current_point_cloud": cur_pc, "view_state": self.view_state}
-
-    def _get_observation_space_continuous(self):
-        """Get observation for continuous mode with normalized scalars."""
-        # Use current_points_cloud directly in continuous mode (no _sync_legacy_coverage_buffers)
+        """Get observation with normalized scalars."""
         source_pc = self.current_points_cloud
-        
+
         if self.observation_space_dim == -1:
             # do not downsample, just for debug
             cur_pc = source_pc.T
@@ -925,7 +664,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             if self.is_normalize:
                 cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
             cur_pc = cur_pc.T
-        
+
         return {
             "current_point_cloud": cur_pc.astype(np.float32),
             "camera_position": self.current_position.astype(np.float32),
@@ -935,8 +674,10 @@ class PointCloudNextBestViewEnv(gym.Env):
                 dtype=np.float32,
             ),
             "time_remaining": np.array(
-                [max(0.0, self.orbit_config.total_time - self.current_time)
-                 / self.orbit_config.total_time],
+                [
+                    max(0.0, self.orbit_config.total_time - self.current_time)
+                    / self.orbit_config.total_time
+                ],
                 dtype=np.float32,
             ),
         }
@@ -948,27 +689,12 @@ class PointCloudNextBestViewEnv(gym.Env):
             return True
         if self.cumulative_dv > self.fuel_budget:
             return True
-        if self.continuous_mode and self.current_time >= self.orbit_config.total_time:
+        if self.current_time >= self.orbit_config.total_time:
             return True
         return False
 
     def _get_info(self, travel_time=0.0, delta_v=0.0):
-        if self.continuous_mode:
-            return self._get_info_continuous(travel_time, delta_v)
-        else:
-            return self._get_info_discrete()
-
-    def _get_info_discrete(self):
-        return {
-            "cur_points_cloud": self.ground_truth_points_cloud,
-            "model_name": self.model_name,
-            "current_coverage": self.current_coverage,
-            "sun_position": self.current_sun_position.copy(),
-            "mission_time": self.current_time,
-            "cumulative_dv": self.cumulative_dv,
-            "fuel_budget": self.fuel_budget,
-            "fuel_remaining": max(0.0, self.fuel_budget - self.cumulative_dv),
-        }
+        return self._get_info_continuous(travel_time, delta_v)
 
     def _get_info_continuous(self, travel_time, delta_v):
         """Get info dict for continuous mode."""
@@ -1141,12 +867,16 @@ class PointCloudNextBestViewEnv(gym.Env):
         new_points_tensor = torch.tensor(
             new_points[np.newaxis, :, :].astype(np.float32)
         ).to(self.DEVICE)
-        
+
         # Calculate distance from new points to ground truth using cached tensor
-        _, dist_to_gt = ChamferDistanceFunction.apply(new_points_tensor, self._canonical_tensor)
-        
+        _, dist_to_gt = ChamferDistanceFunction.apply(
+            new_points_tensor, self._canonical_tensor
+        )
+
         # dist_to_gt[i] = distance from canonical point i to nearest new point
-        newly_covered_mask = dist_to_gt.detach().cpu().numpy()[0] < self.COVERAGE_THRESHOLD
+        newly_covered_mask = (
+            dist_to_gt.detach().cpu().numpy()[0] < self.COVERAGE_THRESHOLD
+        )
 
         # Merge into persistent coverage map
         self._coverage_map |= newly_covered_mask
