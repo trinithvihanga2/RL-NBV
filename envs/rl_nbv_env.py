@@ -1,8 +1,8 @@
 import numpy as np
-import math
 import gym
 from gym import spaces
 import envs.shapenet_reader as shapenet_reader
+import open3d as o3d
 import random
 import torch
 import sys
@@ -28,6 +28,14 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Maximum size for accumulated point cloud in continuous mode (prevents unbounded growth)
 MAX_CLOUD_SIZE = 8192
+
+PARTIAL_RENDER_WIDTH = 640
+PARTIAL_RENDER_HEIGHT = 480
+PARTIAL_RENDER_FX = 525.0
+PARTIAL_RENDER_FY = 525.0
+PARTIAL_RENDER_CX = 319.5
+PARTIAL_RENDER_CY = 239.5
+MODEL_NORMALIZATION_SCALE = 0.8
 
 
 def resample_pcd(pcd, n, logger, name):
@@ -152,6 +160,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         real_data_path = data_path
         if env_id is not None:
             real_data_path = os.path.join(data_path, str(env_id))
+        self.data_path = real_data_path
         self.shapenet_reader = shapenet_reader.ShapenetReader(
             real_data_path, view_num, self.logger, True
         )
@@ -408,6 +417,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         self._transition_state = None
         self._canonical_points = np.zeros((0, 3), dtype=np.float32)
         self._model_transition_cache = {}
+        self._mesh_cache = {}
         self._initialize_state_transition_for_current_model(self.current_view)
         
         # Initialize coverage map for continuous mode
@@ -974,11 +984,153 @@ class PointCloudNextBestViewEnv(gym.Env):
             "fuel_remaining": max(0.0, self.fuel_budget - self.cumulative_dv),
         }
 
+    def _camera_axes(self, eye, target=None, up=None):
+        if target is None:
+            target = np.zeros(3, dtype=np.float64)
+        if up is None:
+            up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+        eye = np.asarray(eye, dtype=np.float64)
+        target = np.asarray(target, dtype=np.float64)
+        up = np.asarray(up, dtype=np.float64)
+
+        fwd = target - eye
+        fwd /= np.linalg.norm(fwd)
+
+        if abs(np.dot(fwd, up)) > 0.999:
+            up = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
+        right = np.cross(fwd, up)
+        right /= np.linalg.norm(right)
+        up_new = np.cross(right, fwd)
+
+        return right, up_new, fwd, eye
+
+    def _resolve_current_model_mesh_path(self):
+        model_name = self.shapenet_reader.get_model_info()
+        candidate_paths = [
+            os.path.join(self.data_path, model_name, "model.obj"),
+            os.path.join(self.data_path, f"{model_name}.obj"),
+            os.path.join(self.shapenet_reader.data_path, model_name, "model.obj"),
+            os.path.join(self.shapenet_reader.data_path, f"{model_name}.obj"),
+        ]
+        for candidate_path in candidate_paths:
+            if os.path.isfile(candidate_path):
+                return candidate_path
+        return None
+
+    def _load_current_model_mesh(self):
+        model_name = self.shapenet_reader.get_model_info()
+        cached_mesh = self._mesh_cache.get(model_name)
+        if cached_mesh is not None:
+            return cached_mesh
+
+        mesh_path = self._resolve_current_model_mesh_path()
+        if mesh_path is None:
+            self.logger.debug(
+                "[continuous] No model.obj found for model %s; using canonical-point fallback",
+                model_name,
+            )
+            return None
+
+        mesh = o3d.io.read_triangle_mesh(mesh_path, enable_post_processing=True)
+        if mesh.is_empty() or not mesh.has_vertices():
+            self.logger.warning(
+                "[continuous] Failed to load mesh from %s; using canonical-point fallback",
+                mesh_path,
+            )
+            return None
+
+        mesh.compute_vertex_normals()
+        vertices = np.asarray(mesh.vertices)
+        centroid = vertices.mean(axis=0)
+        mesh.translate(-centroid)
+        vertices = np.asarray(mesh.vertices)
+        max_dist = float(np.max(np.linalg.norm(vertices, axis=1)))
+        if max_dist > 0.0:
+            mesh.scale(MODEL_NORMALIZATION_SCALE / max_dist, center=(0, 0, 0))
+        mesh.compute_vertex_normals()
+
+        self._mesh_cache[model_name] = mesh
+        self.logger.info(
+            "[continuous] Loaded mesh for %s from %s", model_name, mesh_path
+        )
+        return mesh
+
+    def _render_partial_points_from_mesh(self, mesh, position):
+        scene = o3d.t.geometry.RaycastingScene()
+        mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+        scene.add_triangles(mesh_t)
+
+        right, up_vec, fwd, origin = self._camera_axes(position)
+
+        us = np.arange(PARTIAL_RENDER_WIDTH, dtype=np.float64)
+        vs = np.arange(PARTIAL_RENDER_HEIGHT, dtype=np.float64)
+        uu, vv = np.meshgrid(us, vs)
+
+        xc = (uu - PARTIAL_RENDER_CX) / PARTIAL_RENDER_FX
+        yc = (vv - PARTIAL_RENDER_CY) / PARTIAL_RENDER_FY
+
+        dirs = (
+            fwd[np.newaxis, np.newaxis, :]
+            + xc[..., np.newaxis] * right[np.newaxis, np.newaxis, :]
+            - yc[..., np.newaxis] * up_vec[np.newaxis, np.newaxis, :]
+        )
+
+        norms = np.linalg.norm(dirs, axis=-1, keepdims=True)
+        dirs_unit = (dirs / np.maximum(norms, 1e-12)).astype(np.float32)
+        origins = np.full(dirs_unit.shape, origin, dtype=np.float32)
+
+        rays = np.concatenate(
+            [origins.reshape(-1, 3), dirs_unit.reshape(-1, 3)], axis=1
+        )
+        rays_t = o3d.core.Tensor(rays, dtype=o3d.core.Dtype.Float32)
+        result = scene.cast_rays(rays_t)
+        t_hit = (
+            result["t_hit"].numpy().reshape(PARTIAL_RENDER_HEIGHT, PARTIAL_RENDER_WIDTH)
+        )
+
+        valid = np.isfinite(t_hit) & (t_hit > 0.0)
+        if not np.any(valid):
+            return np.zeros((0, 3), dtype=np.float32)
+
+        t_v = t_hit[valid].astype(np.float64)
+        dirs_v = dirs_unit[valid].astype(np.float64)
+        pts = origin + t_v[:, np.newaxis] * dirs_v
+
+        keep = np.linalg.norm(pts, axis=1) < 1.2
+        pts = pts[keep]
+        return pts.astype(np.float32)
+
     def _get_points_from_position(self, position):
-        """Find nearest precomputed viewpoint and return its point cloud."""
-        dists = np.linalg.norm(self.viewpoints - position[None, :], axis=1)
-        nearest_idx = int(np.argmin(dists))
-        return self.shapenet_reader.get_point_cloud_by_view_id(nearest_idx)
+        """Generate the partial point cloud for an arbitrary camera position.
+
+        The primary path mirrors the render pipeline used in the render tools: load the
+        current model mesh, ray-cast from the requested camera position, and return the
+        visible surface points in world space. If a mesh is not available, fall back to a
+        geometric visibility mask over the canonical point cloud so continuous mode still
+        works with pre-generated point-cloud datasets.
+        """
+        mesh = self._load_current_model_mesh()
+        if mesh is not None:
+            points = self._render_partial_points_from_mesh(mesh, position)
+            if points.shape[0] > 0:
+                return points
+
+        canonical_points = np.asarray(self._canonical_points, dtype=np.float32)
+        if canonical_points.shape[0] == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        position = np.asarray(position, dtype=np.float32)
+        d = float(np.linalg.norm(position))
+        if d < 1e-12:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        u_hat = position / d
+        chief_radius = float(self.orbit_config.orbit_radius)
+        rhs = (chief_radius * chief_radius) / d
+        visible_mask = np.asarray(canonical_points @ u_hat >= rhs, dtype=bool)
+        return canonical_points[visible_mask]
 
     def _update_coverage(self, new_points):
         """Update coverage with new points and return coverage gain using persistent coverage map."""
