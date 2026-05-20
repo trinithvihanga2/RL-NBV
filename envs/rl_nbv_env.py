@@ -521,7 +521,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         # Used for greedy policy evaluation and planning.
         raise NotImplementedError("try_step is not supported in continuous mode")
 
-    def reset(self, init_step=-1):
+    def reset(self, *, seed=None, options=None):
         self.shapenet_reader.get_next_model()
         self.action_history.clear()
         self.step_cnt = 1
@@ -560,9 +560,9 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
 
         observation = self._get_observation_space()
-        self._get_info()
+        info = self._get_info()
         self.logger.debug("[reset] pass, init step: {}".format(self.current_view))
-        return observation
+        return observation, info
 
     def close(self):
         pass
