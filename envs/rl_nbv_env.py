@@ -125,8 +125,6 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         from envs.state_transition.cw_utils import CWDynamics
 
-        self.cw = None
-
         self.action_space = spaces.Box(
             low=np.array([0.0, 0.0]),
             high=np.array([np.pi, 2 * np.pi]),
