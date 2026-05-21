@@ -58,13 +58,63 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Condition-number threshold above which Φ_rv is treated as singular.
+# Condition-number threshold above which the position-control block is singular.
 _COND_THRESHOLD = 1e10
 
 
 # =============================================================================
 # State-Transition Matrix (STM)
 # =============================================================================
+
+
+def _build_state_control_matrices(n: float, t: float):
+    """
+    Build fly-around-style CW discrete dynamics matrices.
+
+    Returns
+    -------
+    A : np.ndarray, shape (6, 6)
+        Coasting state transition so that x_{k+1} = A x_k + B u_k.
+    B : np.ndarray, shape (6, 3)
+        Control-effect matrix where u_k is an impulsive Δv at node k.
+    """
+    nt = n * t
+    s = np.sin(nt)
+    c = np.cos(nt)
+
+    Phi_rr = np.array(
+        [
+            [4 - 3 * c, 0, 0],
+            [6 * (s - nt), 1, 0],
+            [0, 0, c],
+        ]
+    )
+    Phi_rv = np.array(
+        [
+            [s / n, 2 * (1 - c) / n, 0],
+            [2 * (c - 1) / n, (4 * s - 3 * nt) / n, 0],
+            [0, 0, s / n],
+        ]
+    )
+    Phi_vr = np.array(
+        [
+            [3 * n * s, 0, 0],
+            [6 * n * (c - 1), 0, 0],
+            [0, 0, -n * s],
+        ]
+    )
+    Phi_vv = np.array(
+        [
+            [c, 2 * s, 0],
+            [-2 * s, 4 * c - 3, 0],
+            [0, 0, c],
+        ]
+    )
+
+    A = np.block([[Phi_rr, Phi_rv], [Phi_vr, Phi_vv]])
+    B = np.vstack([Phi_rv, Phi_vv])
+    return A, B
+
 
 def _build_stm(n: float, t: float):
     """
@@ -99,57 +149,11 @@ def _build_stm(n: float, t: float):
       y : along-track (tangential, direction of orbital motion)
       z : cross-track (out-of-plane, normal to orbit)
     """
-    nt  = n * t          # dimensionless phase angle
-    s   = np.sin(nt)
-    c   = np.cos(nt)
-
-    # ── Position-to-position  Φ_rr ──────────────────────────────────────────
-    #
-    #   [ 4-3cos(nt)       0      0      ]
-    #   [ 6(sin(nt)-nt)    1      0      ]
-    #   [ 0                0      cos(nt)]
-    #
-    Phi_rr = np.array([
-        [4 - 3*c,       0,  0],
-        [6*(s - nt),    1,  0],
-        [0,             0,  c],
-    ])
-
-    # ── Velocity-to-position  Φ_rv ──────────────────────────────────────────
-    #
-    #   [ sin(nt)/n          2(1-cos(nt))/n        0          ]
-    #   [ 2(cos(nt)-1)/n     (4sin(nt)-3nt)/n      0          ]
-    #   [ 0                  0                     sin(nt)/n  ]
-    #
-    Phi_rv = np.array([
-        [ s/n,           2*(1 - c)/n,        0  ],
-        [-2*(1 - c)/n,  (4*s - 3*nt)/n,      0  ],
-        [ 0,             0,                  s/n],
-    ])
-
-    # ── Position-to-velocity  Φ_vr ──────────────────────────────────────────
-    #
-    #   [ 3n·sin(nt)      0      0          ]
-    #   [ 6n(cos(nt)-1)   0      0          ]
-    #   [ 0               0      -n·sin(nt) ]
-    #
-    Phi_vr = np.array([
-        [3*n*s,          0,  0       ],
-        [6*n*(c - 1),    0,  0       ],
-        [0,              0, -n*s     ],
-    ])
-
-    # ── Velocity-to-velocity  Φ_vv ──────────────────────────────────────────
-    #
-    #   [ cos(nt)      2·sin(nt)    0      ]
-    #   [ -2·sin(nt)   4cos(nt)-3   0      ]
-    #   [ 0            0            cos(nt)]
-    #
-    Phi_vv = np.array([
-        [ c,       2*s,        0],
-        [-2*s,     4*c - 3,    0],
-        [ 0,       0,          c],
-    ])
+    A, _ = _build_state_control_matrices(n, t)
+    Phi_rr = A[:3, :3]
+    Phi_rv = A[:3, 3:]
+    Phi_vr = A[3:, :3]
+    Phi_vv = A[3:, 3:]
 
     return Phi_rr, Phi_rv, Phi_vr, Phi_vv
 
@@ -157,6 +161,7 @@ def _build_stm(n: float, t: float):
 # =============================================================================
 # CWDynamics  –  the main class
 # =============================================================================
+
 
 class CWDynamics:
     """
@@ -168,7 +173,7 @@ class CWDynamics:
 
         cw = CWDynamics(mean_motion=1.0)
 
-        delta_v, v0 = cw.compute_delta_v(
+        delta_v, v0, vf = cw.compute_delta_v(
             r0 = viewpoints[3] * orbit_radius,   # scale from unit sphere
             rf = viewpoints[7] * orbit_radius,
             t  = travel_times[3, 7],             # time of flight
@@ -193,19 +198,21 @@ class CWDynamics:
         self,
         r0: np.ndarray,
         rf: np.ndarray,
-        t:  float,
+        t: float,
     ):
         """
         Compute the Δv required to travel from r0 to rf in time t.
 
-        Algorithm
-        ---------
-        1.  Build Φ_rr, Φ_rv, Φ_vr, Φ_vv from the CW STM.
-        2.  Solve the linear system:
-                Φ_rv · v0  =  rf  −  Φ_rr · r0
-            for the required initial velocity v0.
-        3.  Compute final velocity: vf = Φ_vr · r0 + Φ_vv · v0
-        4.  Return Δv = ‖v0‖ + ‖vf‖ as the scalar cost.
+        Algorithm (fly-around compatible)
+        ---------------------------------
+        1.  Build discrete CW matrices A, B such that
+            x1 = A x0 + B u0,
+            where x = [r; v] and u0 is an impulsive departure Δv.
+        2.  Assume current relative velocity is zero (x0 = [r0; 0]).
+        3.  Solve position endpoint constraint for u0 using the top block:
+            B_r · u0 = rf − A_rr · r0
+        4.  Propagate final velocity with x1 and use braking burn vf.
+        5.  Return Δv = ‖u0‖ + ‖vf‖.
 
         Parameters
         ----------
@@ -224,38 +231,38 @@ class CWDynamics:
             Returns np.inf if the manoeuvre is dynamically infeasible (e.g.
             Φ_rv is singular at certain multiples of the orbital period).
         v0 : np.ndarray or None
-            Required initial velocity vector. Returns None if infeasible.
-            When infeasible, the tuple returned is (np.inf, None).
+            Required departure impulse vector u0. Returns None if infeasible.
+            When infeasible, the tuple returned is (np.inf, None, None).
         """
         # Trivial case: no movement needed
         if t <= 0.0:
             return 0.0, np.zeros(3), np.zeros(3)
 
-        Phi_rr, Phi_rv, Phi_vr, Phi_vv = _build_stm(self.n, t)
+        A, B = _build_state_control_matrices(self.n, t)
+        A_rr = A[:3, :3]
+        B_r = B[:3, :]
 
-        # Guard against singular Φ_rv (occurs at t = k·π/n, i.e. every
+        # Guard against singular position-control map (occurs at t = k·π/n, i.e. every
         # half orbital period — NOT every full period as is sometimes assumed).
-        if np.linalg.cond(Phi_rv) > _COND_THRESHOLD:
+        if np.linalg.cond(B_r) > _COND_THRESHOLD:
             logger.debug(
-                f"CW singular at t={t:.4f}  (likely t ≈ k·π/n). "
-                "Returning Δv = inf."
+                f"CW singular at t={t:.4f}  (likely t ≈ k·π/n). Returning Δv = inf."
             )
             return np.inf, None, None
 
-        # Rearrange:  rf = Phi_rr·r0 + Phi_rv·v0
-        #          →  Phi_rv·v0 = rf - Phi_rr·r0
-        rhs = rf - Phi_rr @ r0
+        # Endpoint equation from x1 = A x0 + B u0 with x0 = [r0; 0].
+        rhs = rf - A_rr @ r0
 
         try:
-            v0 = np.linalg.solve(Phi_rv, rhs)
+            v0 = np.linalg.solve(B_r, rhs)
         except np.linalg.LinAlgError:
-            logger.debug(
-                f"CW solve failed at t={t:.4f}. Returning Δv = inf."
-            )
+            logger.debug(f"CW solve failed at t={t:.4f}. Returning Δv = inf.")
             return np.inf, None, None
 
-        # Arrival (braking) burn — must cancel residual velocity at rf
-        vf = Phi_vr @ r0 + Phi_vv @ v0
+        # Propagate to final state and use final velocity magnitude as braking burn.
+        x0 = np.concatenate([r0, np.zeros(3)])
+        xf = A @ x0 + B @ v0
+        vf = xf[3:]
 
         delta_v = float(np.linalg.norm(v0)) + float(np.linalg.norm(vf))
         return delta_v, v0, vf
@@ -265,7 +272,7 @@ class CWDynamics:
         self,
         r0: np.ndarray,
         v0: np.ndarray,
-        t:  float,
+        t: float,
     ):
         """
         Propagate (r0, v0) forward by time t and return the final state.
@@ -283,9 +290,11 @@ class CWDynamics:
         rf : np.ndarray, shape (3,)   Final relative position.
         vf : np.ndarray, shape (3,)   Final relative velocity.
         """
-        Phi_rr, Phi_rv, Phi_vr, Phi_vv = _build_stm(self.n, t)
-        rf = Phi_rr @ r0 + Phi_rv @ v0
-        vf = Phi_vr @ r0 + Phi_vv @ v0
+        A, _ = _build_state_control_matrices(self.n, t)
+        x0 = np.concatenate([r0, v0])
+        xf = A @ x0
+        rf = xf[:3]
+        vf = xf[3:]
         return rf, vf
 
 
@@ -293,11 +302,12 @@ class CWDynamics:
 # Batch pre-computation
 # =============================================================================
 
+
 def compute_delta_v_matrix(
-    viewpoints:   np.ndarray,
+    viewpoints: np.ndarray,
     travel_times: np.ndarray,
     orbit_radius: float,
-    mean_motion:  float,
+    mean_motion: float,
 ) -> np.ndarray:
     """
     Pre-compute the Δv cost for every ordered pair (i → j) of viewpoints.
@@ -351,9 +361,9 @@ def compute_delta_v_matrix(
             # Scale unit-sphere coords to actual orbital radius
             r0 = viewpoints[i] * orbit_radius
             rf = viewpoints[j] * orbit_radius
-            t  = travel_times[i, j]
+            t = travel_times[i, j]
 
-            dv_total, v0 = cw.compute_delta_v(r0, rf, t)
+            dv_total, _, _ = cw.compute_delta_v(r0, rf, t)
             delta_v_matrix[i, j] = dv_total
 
     logger.info(
@@ -376,15 +386,15 @@ if __name__ == "__main__":
     print("CW Dynamics — Quick Self-Test")
     print("=" * 60)
 
-    n  = 1.0          # mean motion (unit-sphere defaults)
+    n = 1.0  # mean motion (unit-sphere defaults)
     cw = CWDynamics(mean_motion=n)
 
     # Two viewpoints on the unit sphere (already on surface)
-    r0 = np.array([1.0,  0.0,  0.0])   # "front"
-    rf = np.array([0.0,  1.0,  0.0])   # "left"
+    r0 = np.array([1.0, 0.0, 0.0])  # "front"
+    rf = np.array([0.0, 1.0, 0.0])  # "left"
 
     # Time of flight: quarter orbit
-    t = (2.0 * np.pi / n) / 4.0        # ≈ π/2
+    t = (2.0 * np.pi / n) / 4.0  # ≈ π/2
 
     dv, v0, vf = cw.compute_delta_v(r0, rf, t)
     rf_check, _ = cw.compute_final_velocity(r0, v0, t)
