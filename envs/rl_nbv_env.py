@@ -97,6 +97,8 @@ class PointCloudNextBestViewEnv(gym.Env):
         time_cost_weight=1.0,
         fuel_budget=50.0,
         delta_v_weight=1.0,
+        collision_penalty_weight=25.0,
+        collision_check_samples=32,
         sun_position_config=None,
         target_orbit_config=None,
         state_reward_config=None,
@@ -117,6 +119,8 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.cur_coverage_ratio = cur_coverage_ratio
         self.time_cost_weight = time_cost_weight
         self.delta_v_weight = delta_v_weight
+        self.collision_penalty_weight = collision_penalty_weight
+        self.collision_check_samples = max(int(collision_check_samples), 2)
         self.fuel_budget = fuel_budget
         self.cumulative_dv = 0.0
         self.sun_position_config = sun_position_config or {}
@@ -488,6 +492,37 @@ class PointCloudNextBestViewEnv(gym.Env):
         if delta_v == np.inf:
             delta_v = self.max_delta_v  # fallback for singular transfers
 
+        collision_detected, collision_penalty, collision_min_clearance = (
+            self._check_transfer_collision(r0, rf, travel_time)
+        )
+        if collision_detected:
+            reward = self._get_reward(
+                cover_add=0.0,
+                action=0,
+                travel_time=travel_time,
+                delta_v=delta_v,
+                collision_penalty=collision_penalty,
+            )
+            terminated = True
+            observation = self._get_observation_space()
+            info = self._get_info(
+                travel_time,
+                delta_v,
+                requested_transfer_time,
+                collision_detected=True,
+                collision_penalty=collision_penalty,
+                collision_min_clearance=collision_min_clearance,
+            )
+            self.logger.warning(
+                "[COLLISION] action=%s travel_time=%.6f delta_v=%.6f clearance=%.6f penalty=%.6f",
+                np.array2string(action, precision=4),
+                travel_time,
+                delta_v,
+                collision_min_clearance,
+                collision_penalty,
+            )
+            return observation, reward, terminated, info
+
         # 4. Get visible points from new position (nearest view approximation)
         new_view_points = self._get_points_from_position(new_position)
 
@@ -521,7 +556,14 @@ class PointCloudNextBestViewEnv(gym.Env):
         terminated = self._get_terminated()
 
         observation = self._get_observation_space()
-        info = self._get_info(travel_time, delta_v, requested_transfer_time)
+        info = self._get_info(
+            travel_time,
+            delta_v,
+            requested_transfer_time,
+            collision_detected=False,
+            collision_penalty=0.0,
+            collision_min_clearance=None,
+        )
 
         return observation, reward, terminated, info
 
@@ -586,7 +628,14 @@ class PointCloudNextBestViewEnv(gym.Env):
     def _caculate_current_coverage(self):
         return self.current_coverage
 
-    def _get_reward(self, cover_add, action, travel_time=0.0, delta_v=0.0):
+    def _get_reward(
+        self,
+        cover_add,
+        action,
+        travel_time=0.0,
+        delta_v=0.0,
+        collision_penalty=0.0,
+    ):
         """
         Calculate reward combining coverage gain and travel time cost.
 
@@ -649,11 +698,12 @@ class PointCloudNextBestViewEnv(gym.Env):
         normalized_delta_v = delta_v * 10 / self.max_delta_v
         time_penalty = self.time_cost_weight * normalized_travel_time
         fuel_penalty = self.delta_v_weight * normalized_delta_v
-        final_reward = coverage_reward - time_penalty - fuel_penalty
+        final_reward = coverage_reward - time_penalty - fuel_penalty - collision_penalty
 
         self.logger.debug(
             f"[REWARD] action={action:2d}, coverage_reward={coverage_reward:7.4f}, "
-            f"time_penalty={time_penalty:7.4f}, fuel_penalty={fuel_penalty:7.4f}, final={final_reward:7.4f}"
+            f"time_penalty={time_penalty:7.4f}, fuel_penalty={fuel_penalty:7.4f}, "
+            f"collision_penalty={collision_penalty:7.4f}, final={final_reward:7.4f}"
         )
 
         return final_reward
@@ -704,10 +754,33 @@ class PointCloudNextBestViewEnv(gym.Env):
             return True
         return False
 
-    def _get_info(self, travel_time=0.0, delta_v=0.0, requested_travel_time=None):
-        return self._get_info_continuous(travel_time, delta_v, requested_travel_time)
+    def _get_info(
+        self,
+        travel_time=0.0,
+        delta_v=0.0,
+        requested_travel_time=None,
+        collision_detected=False,
+        collision_penalty=0.0,
+        collision_min_clearance=None,
+    ):
+        return self._get_info_continuous(
+            travel_time,
+            delta_v,
+            requested_travel_time,
+            collision_detected,
+            collision_penalty,
+            collision_min_clearance,
+        )
 
-    def _get_info_continuous(self, travel_time, delta_v, requested_travel_time=None):
+    def _get_info_continuous(
+        self,
+        travel_time,
+        delta_v,
+        requested_travel_time=None,
+        collision_detected=False,
+        collision_penalty=0.0,
+        collision_min_clearance=None,
+    ):
         """Get info dict for continuous mode."""
         if requested_travel_time is None:
             requested_travel_time = travel_time
@@ -719,10 +792,76 @@ class PointCloudNextBestViewEnv(gym.Env):
             "travel_time": travel_time,
             "requested_travel_time": requested_travel_time,
             "delta_v": delta_v,
+            "collision_detected": collision_detected,
+            "collision_penalty": collision_penalty,
+            "collision_min_clearance": collision_min_clearance,
             "mission_time": self.current_time,
             "cumulative_dv": self.cumulative_dv,
             "fuel_remaining": max(0.0, self.fuel_budget - self.cumulative_dv),
         }
+
+    def _build_collision_scene(self, mesh):
+        scene = o3d.t.geometry.RaycastingScene()
+        mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+        scene.add_triangles(mesh_t)
+        return scene
+
+    def _check_transfer_collision(self, start_position, end_position, travel_time):
+        mesh = self._load_current_model_mesh()
+        if mesh is not None:
+            try:
+                scene = self._build_collision_scene(mesh)
+                sample_count = max(
+                    self.collision_check_samples,
+                    int(np.ceil(max(float(travel_time), 1.0) * 8.0)),
+                )
+                fractions = np.linspace(0.0, 1.0, sample_count, dtype=np.float32)[1:-1]
+                if fractions.size == 0:
+                    return False, 0.0, None
+
+                samples = (
+                    start_position[np.newaxis, :] * (1.0 - fractions[:, np.newaxis])
+                    + end_position[np.newaxis, :] * fractions[:, np.newaxis]
+                ).astype(np.float32)
+                sample_tensor = o3d.core.Tensor(samples, dtype=o3d.core.Dtype.Float32)
+
+                if hasattr(scene, "compute_signed_distance"):
+                    signed_distance = scene.compute_signed_distance(
+                        sample_tensor
+                    ).numpy()
+                    signed_distance = np.asarray(signed_distance, dtype=np.float32)
+                    min_clearance = float(np.min(signed_distance))
+                    collision_mask = signed_distance <= 0.0
+                    if np.any(collision_mask):
+                        penetration = max(0.0, -min_clearance)
+                        collision_penalty = self.collision_penalty_weight * (
+                            1.0 + penetration
+                        )
+                        return True, collision_penalty, min_clearance
+                    return False, 0.0, min_clearance
+            except Exception as exc:
+                self.logger.debug("[COLLISION] signed-distance check failed: %s", exc)
+
+        # Conservative fallback when signed distance is unavailable.
+        samples = np.linspace(
+            0.0, 1.0, max(self.collision_check_samples, 2), dtype=np.float32
+        )[1:-1]
+        if samples.size == 0:
+            return False, 0.0, None
+        interpolated = (
+            start_position[np.newaxis, :] * (1.0 - samples[:, np.newaxis])
+            + end_position[np.newaxis, :] * samples[:, np.newaxis]
+        )
+        radii = np.linalg.norm(interpolated, axis=1)
+        collision_radius = float(
+            self.orbit_config.orbit_radius * MODEL_NORMALIZATION_SCALE
+        )
+        min_clearance = float(np.min(radii) - collision_radius)
+        if np.any(radii <= collision_radius):
+            penetration = max(0.0, -min_clearance)
+            collision_penalty = self.collision_penalty_weight * (1.0 + penetration)
+            return True, collision_penalty, min_clearance
+        return False, 0.0, min_clearance
 
     def _camera_axes(self, eye, target=None, up=None):
         if target is None:
