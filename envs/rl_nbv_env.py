@@ -15,7 +15,6 @@ from envs.state_transition import (
     calculate_sun_position,
     compute_all_travel_times,
     compute_delta_v_matrix,
-    get_travel_time,
 )
 import logging
 
@@ -125,12 +124,6 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         from envs.state_transition.cw_utils import CWDynamics
 
-        self.action_space = spaces.Box(
-            low=np.array([0.0, 0.0]),
-            high=np.array([np.pi, 2 * np.pi]),
-            shape=(2,),
-            dtype=np.float32,
-        )
         self.DEVICE = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -280,6 +273,14 @@ class PointCloudNextBestViewEnv(gym.Env):
             orbit_radius=float(target_orbit_config.get("orbit_radius", 1.0)),
             grav_param=float(target_orbit_config.get("grav_param", 1.0)),
             num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
+        )
+        self.action_space = spaces.Box(
+            low=np.array([0.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array(
+                [np.pi, 2 * np.pi, self.orbit_config.total_time], dtype=np.float32
+            ),
+            shape=(3,),
+            dtype=np.float32,
         )
         self.logger.info(
             "TargetOrbitConfig from env config: orbit_radius=%.4f, grav_param=%.4f, num_orbits=%.4f",
@@ -451,10 +452,20 @@ class PointCloudNextBestViewEnv(gym.Env):
         return self._step_continuous(action)
 
     def _step_continuous(self, action):
-        # action: spherical coordinates [theta, phi]
-        # theta: polar angle [0, pi] (0 to 180 degrees)
-        # phi: azimuthal angle [0, 2pi] (0 to 360 degrees)
-        theta, phi = action[0], action[1]
+        # action: [theta, phi, transfer_time]
+        # theta: polar angle [0, pi], phi: azimuthal angle [0, 2pi]
+        # transfer_time: requested time-of-flight in [0, orbit_config.total_time]
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action.shape[0] != 3:
+            raise ValueError(
+                "continuous action must have 3 elements [theta, phi, transfer_time], got {}".format(
+                    action.shape[0]
+                )
+            )
+
+        theta = float(np.clip(action[0], 0.0, np.pi))
+        phi = float(np.clip(action[1], 0.0, 2 * np.pi))
+        requested_transfer_time = float(action[2])
 
         # Convert spherical to Cartesian coordinates
         r = self.orbit_config.orbit_radius
@@ -463,10 +474,12 @@ class PointCloudNextBestViewEnv(gym.Env):
         z = r * np.cos(theta)
         new_position = np.array([x, y, z], dtype=np.float32)
 
-        # 2. Compute travel time
-        travel_time = get_travel_time(
-            self.current_position, new_position, self.orbit_config
-        )
+        # 2. Resolve commanded travel time (bounded by remaining mission horizon)
+        remaining_time = max(0.0, self.orbit_config.total_time - self.current_time)
+        if remaining_time <= 0.0:
+            travel_time = 0.0
+        else:
+            travel_time = float(np.clip(requested_transfer_time, 1e-6, remaining_time))
 
         # 3. Compute Δv via CW dynamics (using pre-initialized instance)
         r0 = self.current_position
@@ -508,7 +521,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         terminated = self._get_terminated()
 
         observation = self._get_observation_space()
-        info = self._get_info(travel_time, delta_v)
+        info = self._get_info(travel_time, delta_v, requested_transfer_time)
 
         return observation, reward, terminated, info
 
@@ -691,17 +704,20 @@ class PointCloudNextBestViewEnv(gym.Env):
             return True
         return False
 
-    def _get_info(self, travel_time=0.0, delta_v=0.0):
-        return self._get_info_continuous(travel_time, delta_v)
+    def _get_info(self, travel_time=0.0, delta_v=0.0, requested_travel_time=None):
+        return self._get_info_continuous(travel_time, delta_v, requested_travel_time)
 
-    def _get_info_continuous(self, travel_time, delta_v):
+    def _get_info_continuous(self, travel_time, delta_v, requested_travel_time=None):
         """Get info dict for continuous mode."""
+        if requested_travel_time is None:
+            requested_travel_time = travel_time
         return {
             "cur_points_cloud": self._canonical_points,
             "model_name": self.model_name,
             "current_coverage": self.current_coverage,
             "camera_position": self.current_position.copy(),
             "travel_time": travel_time,
+            "requested_travel_time": requested_travel_time,
             "delta_v": delta_v,
             "mission_time": self.current_time,
             "cumulative_dv": self.cumulative_dv,
