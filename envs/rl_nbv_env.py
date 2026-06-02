@@ -17,65 +17,14 @@ from envs.state_transition import (
     compute_delta_v_matrix,
 )
 import logging
+from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, estimate_surface_normals
+from envs.rendering import EnvironmentRenderer
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Maximum size for accumulated point cloud in continuous mode (prevents unbounded growth)
 MAX_CLOUD_SIZE = 8192
 
-PARTIAL_RENDER_WIDTH = 640
-PARTIAL_RENDER_HEIGHT = 480
-PARTIAL_RENDER_FX = 525.0
-PARTIAL_RENDER_FY = 525.0
-PARTIAL_RENDER_CX = 319.5
-PARTIAL_RENDER_CY = 239.5
-MODEL_NORMALIZATION_SCALE = 0.8
-
-
-def resample_pcd(pcd, n, logger, name):
-    """Drop or duplicate points so that pcd has exactly n points"""
-    if pcd.shape[0] == 0:
-        logger.debug("observation source point cloud is empty, model: {}".format(name))
-        return np.zeros((n, 3))
-    idx = np.random.permutation(pcd.shape[0])
-    if idx.shape[0] < n:
-        idx = np.concatenate(
-            [idx, np.random.randint(pcd.shape[0], size=n - pcd.shape[0])]
-        )
-    logger.debug("resample_pcd from {} to {}, model: {}".format(pcd.shape[0], n, name))
-    return pcd[idx[:n]]
-
-
-def normalize_pc(points, logger, name):
-    if points.shape[0] == 0:
-        logger.debug("normalize received empty points, model: {}".format(name))
-        return points
-    centroid = np.mean(points, axis=0)
-    points -= centroid
-    furthest_distance = np.max(np.sqrt(np.sum(abs(points) ** 2, axis=-1)))
-    if furthest_distance == 0:
-        logger.debug(
-            "normalize skipped due to zero furthest distance, model: {}".format(name)
-        )
-        return points
-    points /= furthest_distance
-    logger.debug(
-        "normalize furthest distance: {:.6f}, model: {}".format(furthest_distance, name)
-    )
-    return points
-
-
-def random_position_on_sphere():
-    """Generate random position on unit sphere using spherical coordinates."""
-    theta = np.random.uniform(0, np.pi)  # Polar angle [0, pi]
-    phi = np.random.uniform(0, 2 * np.pi)  # Azimuthal angle [0, 2pi]
-    r = 1.0  # Unit sphere
-
-    x = r * np.sin(theta) * np.cos(phi)
-    y = r * np.sin(theta) * np.sin(phi)
-    z = r * np.cos(theta)
-
-    return np.array([x, y, z], dtype=np.float32)
 
 
 class PointCloudNextBestViewEnv(gym.Env):
@@ -278,6 +227,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             grav_param=float(target_orbit_config.get("grav_param", 1.0)),
             num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
         )
+        self.renderer = EnvironmentRenderer(self.data_path, self.shapenet_reader, self.orbit_config.orbit_radius, self.collision_check_samples, self.collision_penalty_weight, self.logger)
         self.action_space = spaces.Box(
             low=np.array([0.0, 0.0, 0.0], dtype=np.float32),
             high=np.array(
@@ -364,18 +314,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
         self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
-    def _estimate_surface_normals(self, points):
-        if points.shape[0] == 0:
-            return np.zeros((0, 3), dtype=np.float32)
-        centroid = np.mean(points, axis=0, keepdims=True)
-        vectors = points - centroid
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        normals = vectors / np.maximum(norms, 1e-12)
-        degenerate = norms[:, 0] <= 1e-12
-        if np.any(degenerate):
-            normals[degenerate] = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        return normals.astype(np.float32)
-
     def _build_visible_points_by_view(self, canonical_points):
         point_count = canonical_points.shape[0]
         visible_points = np.zeros((self.view_num, point_count), dtype=bool)
@@ -422,7 +360,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             self._canonical_points = np.asarray(
                 self.shapenet_reader.ground_truth, dtype=np.float32
             )
-            surface_normals = self._estimate_surface_normals(self._canonical_points)
+            surface_normals = estimate_surface_normals(self._canonical_points)
             visible_points_by_view = self._build_visible_points_by_view(
                 self._canonical_points
             )
@@ -493,7 +431,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             delta_v = self.max_delta_v  # fallback for singular transfers
 
         collision_detected, collision_penalty, collision_min_clearance = (
-            self._check_transfer_collision(r0, rf, travel_time)
+            self.renderer.check_transfer_collision(r0, rf, travel_time)
         )
         if collision_detected:
             reward = self._get_reward(
@@ -524,7 +462,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             return observation, reward, terminated, info
 
         # 4. Get visible points from new position (nearest view approximation)
-        new_view_points = self._get_points_from_position(new_position)
+        new_view_points = self.renderer.get_points_from_position(new_position, self._canonical_points)
 
         # 5. Update coverage
         self.current_points_cloud = np.append(
@@ -799,217 +737,6 @@ class PointCloudNextBestViewEnv(gym.Env):
             "cumulative_dv": self.cumulative_dv,
             "fuel_remaining": max(0.0, self.fuel_budget - self.cumulative_dv),
         }
-
-    def _build_collision_scene(self, mesh):
-        scene = o3d.t.geometry.RaycastingScene()
-        mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
-        scene.add_triangles(mesh_t)
-        return scene
-
-    def _check_transfer_collision(self, start_position, end_position, travel_time):
-        mesh = self._load_current_model_mesh()
-        if mesh is not None:
-            try:
-                scene = self._build_collision_scene(mesh)
-                sample_count = max(
-                    self.collision_check_samples,
-                    int(np.ceil(max(float(travel_time), 1.0) * 8.0)),
-                )
-                fractions = np.linspace(0.0, 1.0, sample_count, dtype=np.float32)[1:-1]
-                if fractions.size == 0:
-                    return False, 0.0, None
-
-                samples = (
-                    start_position[np.newaxis, :] * (1.0 - fractions[:, np.newaxis])
-                    + end_position[np.newaxis, :] * fractions[:, np.newaxis]
-                ).astype(np.float32)
-                sample_tensor = o3d.core.Tensor(samples, dtype=o3d.core.Dtype.Float32)
-
-                if hasattr(scene, "compute_signed_distance"):
-                    signed_distance = scene.compute_signed_distance(
-                        sample_tensor
-                    ).numpy()
-                    signed_distance = np.asarray(signed_distance, dtype=np.float32)
-                    min_clearance = float(np.min(signed_distance))
-                    collision_mask = signed_distance <= 0.0
-                    if np.any(collision_mask):
-                        penetration = max(0.0, -min_clearance)
-                        collision_penalty = self.collision_penalty_weight * (
-                            1.0 + penetration
-                        )
-                        return True, collision_penalty, min_clearance
-                    return False, 0.0, min_clearance
-            except Exception as exc:
-                self.logger.debug("[COLLISION] signed-distance check failed: %s", exc)
-
-        # Conservative fallback when signed distance is unavailable.
-        samples = np.linspace(
-            0.0, 1.0, max(self.collision_check_samples, 2), dtype=np.float32
-        )[1:-1]
-        if samples.size == 0:
-            return False, 0.0, None
-        interpolated = (
-            start_position[np.newaxis, :] * (1.0 - samples[:, np.newaxis])
-            + end_position[np.newaxis, :] * samples[:, np.newaxis]
-        )
-        radii = np.linalg.norm(interpolated, axis=1)
-        collision_radius = float(
-            self.orbit_config.orbit_radius * MODEL_NORMALIZATION_SCALE
-        )
-        min_clearance = float(np.min(radii) - collision_radius)
-        if np.any(radii <= collision_radius):
-            penetration = max(0.0, -min_clearance)
-            collision_penalty = self.collision_penalty_weight * (1.0 + penetration)
-            return True, collision_penalty, min_clearance
-        return False, 0.0, min_clearance
-
-    def _camera_axes(self, eye, target=None, up=None):
-        if target is None:
-            target = np.zeros(3, dtype=np.float64)
-        if up is None:
-            up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-
-        eye = np.asarray(eye, dtype=np.float64)
-        target = np.asarray(target, dtype=np.float64)
-        up = np.asarray(up, dtype=np.float64)
-
-        fwd = target - eye
-        fwd /= np.linalg.norm(fwd)
-
-        if abs(np.dot(fwd, up)) > 0.999:
-            up = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-
-        right = np.cross(fwd, up)
-        right /= np.linalg.norm(right)
-        up_new = np.cross(right, fwd)
-
-        return right, up_new, fwd, eye
-
-    def _resolve_current_model_mesh_path(self):
-        model_name = self.shapenet_reader.get_model_info()
-        candidate_paths = [
-            os.path.join(self.data_path, model_name, "model.obj"),
-            os.path.join(self.data_path, f"{model_name}.obj"),
-            os.path.join(self.shapenet_reader.data_path, model_name, "model.obj"),
-            os.path.join(self.shapenet_reader.data_path, f"{model_name}.obj"),
-        ]
-        for candidate_path in candidate_paths:
-            if os.path.isfile(candidate_path):
-                return candidate_path
-        return None
-
-    def _load_current_model_mesh(self):
-        model_name = self.shapenet_reader.get_model_info()
-        cached_mesh = self._mesh_cache.get(model_name)
-        if cached_mesh is not None:
-            return cached_mesh
-
-        mesh_path = self._resolve_current_model_mesh_path()
-        if mesh_path is None:
-            self.logger.debug(
-                "[continuous] No model.obj found for model %s; using canonical-point fallback",
-                model_name,
-            )
-            return None
-
-        mesh = o3d.io.read_triangle_mesh(mesh_path, enable_post_processing=True)
-        if mesh.is_empty() or not mesh.has_vertices():
-            self.logger.warning(
-                "[continuous] Failed to load mesh from %s; using canonical-point fallback",
-                mesh_path,
-            )
-            return None
-
-        mesh.compute_vertex_normals()
-        vertices = np.asarray(mesh.vertices)
-        centroid = vertices.mean(axis=0)
-        mesh.translate(-centroid)
-        vertices = np.asarray(mesh.vertices)
-        max_dist = float(np.max(np.linalg.norm(vertices, axis=1)))
-        if max_dist > 0.0:
-            mesh.scale(MODEL_NORMALIZATION_SCALE / max_dist, center=(0, 0, 0))
-        mesh.compute_vertex_normals()
-
-        self._mesh_cache[model_name] = mesh
-        self.logger.info(
-            "[continuous] Loaded mesh for %s from %s", model_name, mesh_path
-        )
-        return mesh
-
-    def _render_partial_points_from_mesh(self, mesh, position):
-        scene = o3d.t.geometry.RaycastingScene()
-        mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
-        scene.add_triangles(mesh_t)
-
-        right, up_vec, fwd, origin = self._camera_axes(position)
-
-        us = np.arange(PARTIAL_RENDER_WIDTH, dtype=np.float64)
-        vs = np.arange(PARTIAL_RENDER_HEIGHT, dtype=np.float64)
-        uu, vv = np.meshgrid(us, vs)
-
-        xc = (uu - PARTIAL_RENDER_CX) / PARTIAL_RENDER_FX
-        yc = (vv - PARTIAL_RENDER_CY) / PARTIAL_RENDER_FY
-
-        dirs = (
-            fwd[np.newaxis, np.newaxis, :]
-            + xc[..., np.newaxis] * right[np.newaxis, np.newaxis, :]
-            - yc[..., np.newaxis] * up_vec[np.newaxis, np.newaxis, :]
-        )
-
-        norms = np.linalg.norm(dirs, axis=-1, keepdims=True)
-        dirs_unit = (dirs / np.maximum(norms, 1e-12)).astype(np.float32)
-        origins = np.full(dirs_unit.shape, origin, dtype=np.float32)
-
-        rays = np.concatenate(
-            [origins.reshape(-1, 3), dirs_unit.reshape(-1, 3)], axis=1
-        )
-        rays_t = o3d.core.Tensor(rays, dtype=o3d.core.Dtype.Float32)
-        result = scene.cast_rays(rays_t)
-        t_hit = (
-            result["t_hit"].numpy().reshape(PARTIAL_RENDER_HEIGHT, PARTIAL_RENDER_WIDTH)
-        )
-
-        valid = np.isfinite(t_hit) & (t_hit > 0.0)
-        if not np.any(valid):
-            return np.zeros((0, 3), dtype=np.float32)
-
-        t_v = t_hit[valid].astype(np.float64)
-        dirs_v = dirs_unit[valid].astype(np.float64)
-        pts = origin + t_v[:, np.newaxis] * dirs_v
-
-        keep = np.linalg.norm(pts, axis=1) < 1.2
-        pts = pts[keep]
-        return pts.astype(np.float32)
-
-    def _get_points_from_position(self, position):
-        """Generate the partial point cloud for an arbitrary camera position.
-
-        The primary path mirrors the render pipeline used in the render tools: load the
-        current model mesh, ray-cast from the requested camera position, and return the
-        visible surface points in world space. If a mesh is not available, fall back to a
-        geometric visibility mask over the canonical point cloud so continuous mode still
-        works with pre-generated point-cloud datasets.
-        """
-        mesh = self._load_current_model_mesh()
-        if mesh is not None:
-            points = self._render_partial_points_from_mesh(mesh, position)
-            if points.shape[0] > 0:
-                return points
-
-        canonical_points = np.asarray(self._canonical_points, dtype=np.float32)
-        if canonical_points.shape[0] == 0:
-            return np.zeros((0, 3), dtype=np.float32)
-
-        position = np.asarray(position, dtype=np.float32)
-        d = float(np.linalg.norm(position))
-        if d < 1e-12:
-            return np.zeros((0, 3), dtype=np.float32)
-
-        u_hat = position / d
-        chief_radius = float(self.orbit_config.orbit_radius)
-        rhs = (chief_radius * chief_radius) / d
-        visible_mask = np.asarray(canonical_points @ u_hat >= rhs, dtype=bool)
-        return canonical_points[visible_mask]
 
     def _update_coverage(self, new_points):
         """Update coverage with new points and return coverage gain using persistent coverage map."""
