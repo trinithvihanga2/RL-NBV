@@ -22,6 +22,7 @@ from envs.rendering import EnvironmentRenderer
 from envs.state_transition.reward import calculate_continuous_reward
 from envs.state_transition.coverage import update_continuous_coverage
 from envs.state_transition.visibility import filter_lit_points
+from envs.state_transition.travel_time import advance_time
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -476,7 +477,12 @@ class PointCloudNextBestViewEnv(gym.Env):
             return observation, reward, terminated, info
 
         # Advance time and sun position to arrival
-        self.current_time += travel_time
+        self.current_time = advance_time(
+            self.current_time,
+            travel_time,
+            self.orbit_config.total_time,
+            False
+        )
         self.current_sun_position = calculate_sun_position(
             action=0,
             new_time=self.current_time,
