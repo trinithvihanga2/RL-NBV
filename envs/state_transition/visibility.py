@@ -303,3 +303,20 @@ def get_lit_visible_points(
         raise ValueError("illumination mask shape does not match canonical point count")
 
     return np.asarray(visible_mask & illumination_mask, dtype=bool)
+
+def filter_lit_points(points: np.ndarray, normals: np.ndarray, sun_position: np.ndarray) -> np.ndarray:
+    """Filter physically visible points to keep only those illuminated by the sun."""
+    if points.shape[0] == 0:
+        return points
+
+    l_norm = float(np.linalg.norm(sun_position))
+    if l_norm < 1e-12:
+        return points  # If no sun direction, assume all lit
+
+    l_hat = sun_position / l_norm
+    n_hat = _normalize_rows(normals)
+
+    ndotl = np.einsum("ij,j->i", n_hat, l_hat)
+    lit_mask = ndotl > 0.0
+
+    return points[lit_mask]

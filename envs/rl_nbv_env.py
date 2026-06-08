@@ -21,6 +21,7 @@ from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, es
 from envs.rendering import EnvironmentRenderer
 from envs.state_transition.reward import calculate_continuous_reward
 from envs.state_transition.coverage import update_continuous_coverage
+from envs.state_transition.visibility import filter_lit_points
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -474,8 +475,20 @@ class PointCloudNextBestViewEnv(gym.Env):
             )
             return observation, reward, terminated, info
 
-        # 4. Get visible points from new position (nearest view approximation)
+        # Advance time and sun position to arrival
+        self.current_time += travel_time
+        self.current_sun_position = calculate_sun_position(
+            action=0,
+            new_time=self.current_time,
+            prev_sun_position=self.initial_sun_position,
+            orbital_params=self.sun_orbital_params,
+        )
+
+        # 4. Get visible points from new position
         new_view_points = self.renderer.get_points_from_position(new_position, self._canonical_points)
+        if new_view_points.shape[0] > 0:
+            normals = estimate_surface_normals(new_view_points)
+            new_view_points = filter_lit_points(new_view_points, normals, self.current_sun_position)
 
         # 5. Update coverage
         self.current_points_cloud = np.append(
@@ -500,13 +513,6 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         # 6. Update state
         self.current_position = new_position
-        self.current_time += travel_time
-        self.current_sun_position = calculate_sun_position(
-            action=0,
-            new_time=self.current_time,
-            prev_sun_position=self.initial_sun_position,
-            orbital_params=self.sun_orbital_params,
-        )
         self.cumulative_dv += delta_v
         self.step_cnt += 1
 
