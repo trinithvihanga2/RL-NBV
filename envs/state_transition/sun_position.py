@@ -16,20 +16,18 @@ This implementation follows the provided formulation:
 
 Equivalent closed form used here:
 
-        theta_s(t) = theta0 - n * (t - t0) + phi_action
+        theta_s(t) = theta0 - n * (t - t0)
 
 where:
 - n comes from either angular_velocity_rad_per_s or period_s.
 - t0 is time_offset_s (default: 0).
 - theta0 is initial_phase_rad (default: 0).
-- phi_action is optional per-action phase offset from
-    action_phase_offsets_rad (default: 0).
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -78,33 +76,7 @@ def _get_omega(orbital_params: Mapping[str, object]) -> float:
     )
 
 
-def _get_action_phase_offset(action: int, action_phase_offsets: object) -> float:
-    if action_phase_offsets is None:
-        return 0.0
-
-    if isinstance(action_phase_offsets, Mapping):
-        if action in action_phase_offsets:
-            return _as_finite_scalar(
-                f"orbital_params['action_phase_offsets_rad'][{action}]",
-                action_phase_offsets[action],
-            )
-        return 0.0
-
-    if isinstance(action_phase_offsets, Sequence) and not isinstance(
-        action_phase_offsets, (str, bytes)
-    ):
-        if action < 0 or action >= len(action_phase_offsets):
-            return 0.0
-        return _as_finite_scalar(
-            f"orbital_params['action_phase_offsets_rad'][{action}]",
-            action_phase_offsets[action],
-        )
-
-    raise TypeError("action_phase_offsets_rad must be a mapping or sequence")
-
-
 def calculate_sun_position(
-    action: int,
     new_time: float,
     prev_sun_position: object,
     orbital_params: Mapping[str, object],
@@ -112,9 +84,6 @@ def calculate_sun_position(
     """Compute time-dependent unit sun-direction vector.
 
     Args:
-        action: Selected view/action index. Currently optional for dynamics, but
-            supported via action_phase_offsets_rad for deterministic
-            per-action phase offsets.
         new_time: Absolute timestamp in seconds.
         prev_sun_position: Previous sun direction vector, shape (3,).
             Validated for compatibility and future extension, not required by the
@@ -123,14 +92,10 @@ def calculate_sun_position(
             - angular_velocity_rad_per_s (float, >= 0) OR period_s (float, > 0)
             - initial_phase_rad (float, default 0)
             - time_offset_s (float, default 0)
-            - action_phase_offsets_rad (sequence or mapping, optional)
 
     Returns:
         np.ndarray: Unit vector with shape (3,) in the Hill frame.
     """
-
-    if not isinstance(action, int) or isinstance(action, bool):
-        raise TypeError(f"action must be int, got {type(action).__name__}")
 
     _validate_prev_sun_position(prev_sun_position)
 
@@ -147,12 +112,9 @@ def calculate_sun_position(
         "orbital_params['initial_phase_rad']",
         orbital_params.get("initial_phase_rad", 0.0),
     )
-    phi_action = _get_action_phase_offset(
-        action, orbital_params.get("action_phase_offsets_rad")
-    )
 
     # Screenshot model: theta(t + dt) = theta(t) - n * dt.
-    theta = theta0 - omega * (t - t0) + phi_action
+    theta = theta0 - omega * (t - t0)
 
     direction = np.array([math.cos(theta), math.sin(theta), 0.0], dtype=float)
     norm = float(np.linalg.norm(direction))

@@ -484,7 +484,6 @@ class PointCloudNextBestViewEnv(gym.Env):
             False
         )
         self.current_sun_position = calculate_sun_position(
-            action=0,
             new_time=self.current_time,
             prev_sun_position=self.initial_sun_position,
             orbital_params=self.sun_orbital_params,
@@ -584,7 +583,6 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         # Re-initialize and synchronize sun direction with reset mission time.
         self.current_sun_position = calculate_sun_position(
-            action=0,
             new_time=self.current_time,
             prev_sun_position=self.initial_sun_position,
             orbital_params=self.sun_orbital_params,
