@@ -19,6 +19,7 @@ from envs.state_transition import (
 import logging
 from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, estimate_surface_normals
 from envs.rendering import EnvironmentRenderer
+from envs.state_transition.reward import calculate_continuous_reward
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -434,12 +435,23 @@ class PointCloudNextBestViewEnv(gym.Env):
             self.renderer.check_transfer_collision(r0, rf, travel_time)
         )
         if collision_detected:
-            reward = self._get_reward(
+            reward = calculate_continuous_reward(
                 cover_add=0.0,
-                action=0,
+                current_coverage=self.current_coverage,
+                step_cnt=self.step_cnt,
                 travel_time=travel_time,
+                max_travel_time=self.max_travel_time,
                 delta_v=delta_v,
+                max_delta_v=self.max_delta_v,
                 collision_penalty=collision_penalty,
+                is_reward_with_cur_coverage=self.is_reward_with_cur_coverage,
+                is_ratio_reward=self.is_ratio_reward,
+                time_cost_weight=self.time_cost_weight,
+                delta_v_weight=self.delta_v_weight,
+            )
+            self.logger.debug(
+                f"[REWARD] coverage_gain=0.0, travel_time={travel_time:7.4f}, "
+                f"delta_v={delta_v:7.4f}, collision_penalty={collision_penalty:7.4f}, final={reward:7.4f}"
             )
             terminated = True
             observation = self._get_observation_space()
@@ -483,11 +495,23 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.step_cnt += 1
 
         # 7. Compute reward using _get_reward for consistency
-        reward = self._get_reward(
+        reward = calculate_continuous_reward(
             cover_add=coverage_gain,
-            action=0,  # unused in continuous mode
+            current_coverage=self.current_coverage,
+            step_cnt=self.step_cnt,
             travel_time=travel_time,
+            max_travel_time=self.max_travel_time,
             delta_v=delta_v,
+            max_delta_v=self.max_delta_v,
+            collision_penalty=0.0,
+            is_reward_with_cur_coverage=self.is_reward_with_cur_coverage,
+            is_ratio_reward=self.is_ratio_reward,
+            time_cost_weight=self.time_cost_weight,
+            delta_v_weight=self.delta_v_weight,
+        )
+        self.logger.debug(
+            f"[REWARD] coverage_gain={coverage_gain:7.4f}, travel_time={travel_time:7.4f}, "
+            f"delta_v={delta_v:7.4f}, collision_penalty=0.0, final={reward:7.4f}"
         )
 
         # 8. Check termination using _get_terminated for consistency
@@ -566,85 +590,6 @@ class PointCloudNextBestViewEnv(gym.Env):
     def _caculate_current_coverage(self):
         return self.current_coverage
 
-    def _get_reward(
-        self,
-        cover_add,
-        action,
-        travel_time=0.0,
-        delta_v=0.0,
-        collision_penalty=0.0,
-    ):
-        """
-        Calculate reward combining coverage gain and travel time cost.
-
-        Reward = coverage_reward - time_cost_weight * travel_time - delta_v_weight * delta_v
-
-        This encourages agent to:
-        1. Maximize new coverage observation
-        2. Minimize travel time (explore efficiently)
-        3. Balance between distant high-value targets and nearby ones
-
-        Args:
-            cover_add: Coverage gained (0.0 to 1.0)
-            action: Selected viewpoint action
-            travel_time: Time cost to reach this viewpoint (dimensionless units)
-
-        Returns:
-            Scalar reward value
-        """
-        # ========================================================================
-        # STEP 1: CALCULATE BASE COVERAGE REWARD
-        # ========================================================================
-        if self.is_reward_with_cur_coverage:
-            # Reward based on current coverage progress
-            if self.step_cnt < 4:
-                coverage_reward = cover_add * 10
-            else:
-                if cover_add <= 0:
-                    coverage_reward = cover_add * 10
-                else:
-                    # Reward increases as coverage completes (scarcity-based)
-                    remain = 1.0 - (self.current_coverage - cover_add)
-                    coverage_reward = (cover_add / remain) * 5 + cover_add * 5
-        elif self.is_ratio_reward:
-            # Ratio-based reward: prioritize new coverage when near completion
-            if cover_add <= 0:
-                coverage_reward = cover_add * 10
-            else:
-                remain = 1.0 - (self.current_coverage - cover_add)
-                coverage_reward = (cover_add / remain) * 10
-        else:
-            # Simple linear reward: reward = coverage * constant
-            coverage_reward = cover_add * 10
-
-        # ========================================================================
-        # STEP 2: APPLY TRAVEL TIME PENALTY
-        # ========================================================================
-        # Subtract time cost from coverage gain
-        # This makes agent think about efficiency:
-        # "Is this viewpoint worth the travel time?"
-        #
-        # Example:
-        # - High coverage gain (0.10) but far away (travel_time=0.5)
-        #   reward = 1.0 - 1.0*0.5 = 0.5
-        # - Low coverage gain (0.02) but very close (travel_time=0.05)
-        #   reward = 0.2 - 1.0*0.05 = 0.15
-        #
-        # Agent learns to balance:
-        # coverage_reward / travel_time = efficiency
-        normalized_travel_time = travel_time * 10 / self.max_travel_time
-        normalized_delta_v = delta_v * 10 / self.max_delta_v
-        time_penalty = self.time_cost_weight * normalized_travel_time
-        fuel_penalty = self.delta_v_weight * normalized_delta_v
-        final_reward = coverage_reward - time_penalty - fuel_penalty - collision_penalty
-
-        self.logger.debug(
-            f"[REWARD] action={action:2d}, coverage_reward={coverage_reward:7.4f}, "
-            f"time_penalty={time_penalty:7.4f}, fuel_penalty={fuel_penalty:7.4f}, "
-            f"collision_penalty={collision_penalty:7.4f}, final={final_reward:7.4f}"
-        )
-
-        return final_reward
 
     def _get_observation_space(self):
         """Get observation with normalized scalars."""
