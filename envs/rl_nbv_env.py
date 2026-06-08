@@ -12,8 +12,6 @@ from distance.chamfer_distance import ChamferDistanceFunction
 from envs.state_transition import (
     TargetOrbitConfig,
     calculate_sun_position,
-    compute_all_travel_times,
-    compute_delta_v_matrix,
 )
 import logging
 from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, estimate_surface_normals
@@ -248,33 +246,14 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self.cw = CWDynamics(self.orbit_config.mean_motion)
 
-        # Precompute travel times between all pairs of viewpoints
-        # Shape: (view_num, view_num) where [i,j] = travel time from view i to view j
-        if self.viewpoints is not None:
-            self.travel_times = compute_all_travel_times(
-                self.viewpoints, self.orbit_config
-            )
-            self.max_travel_time = max(float(np.max(self.travel_times)), 1e-12)
-            self.logger.info(
-                f"Precomputed travel times matrix shape: {self.travel_times.shape}"
-            )
-        else:
-            self.travel_times = None
-            self.max_travel_time = 1.0
-            self.logger.warning("Travel times not computed (viewpoints unavailable)")
-
-        if self.viewpoints is not None and self.travel_times is not None:
-            self.delta_v_matrix = compute_delta_v_matrix(
-                viewpoints=self.viewpoints,
-                travel_times=self.travel_times,
-                orbit_radius=self.orbit_config.orbit_radius,
-                mean_motion=self.orbit_config.mean_motion,
-            )
-            self.max_delta_v = max(float(np.max(self.delta_v_matrix)), 1e-12)
-        else:
-            raise ValueError(
-                "Delta-V matrix cannot be computed without viewpoints and travel times"
-            )
+        # In continuous environments, matrices are obsolete. 
+        # Set max normalization bounds based on theoretical orbital limits.
+        self.travel_times = None
+        self.delta_v_matrix = None
+        self.max_travel_time = float(self.orbit_config.total_time)
+        # Max theoretical delta-v roughly scales with orbit velocity:
+        v_orbit = self.orbit_config.mean_motion * self.orbit_config.orbit_radius
+        self.max_delta_v = float(2.0 * v_orbit)
 
         # Current mission time (starts at 0.0, increments as agent moves)
         self.current_time = 0.0

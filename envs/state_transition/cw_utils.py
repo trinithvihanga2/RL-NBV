@@ -12,11 +12,8 @@ that is, the position of the spacecraft relative to a reference point that is
 already in a circular orbit around the target.
 
 This module provides:
-  - CWDynamics class : computes the delta-v (Δv) needed to travel between two
-                       points in a given time.
-  - compute_delta_v_matrix() : precomputes Δv for every pair of the 33
-                                viewpoints so the RL environment can do O(1)
-                                lookups during training.
+  - CWDynamics class : computes the continuous delta-v (Δv) needed to travel
+                       between any two orbital positions in a given time.
 
 Key concept — what is Δv?
 --------------------------
@@ -296,84 +293,6 @@ class CWDynamics:
         rf = xf[:3]
         vf = xf[3:]
         return rf, vf
-
-
-# =============================================================================
-# Batch pre-computation
-# =============================================================================
-
-
-def compute_delta_v_matrix(
-    viewpoints: np.ndarray,
-    travel_times: np.ndarray,
-    orbit_radius: float,
-    mean_motion: float,
-) -> np.ndarray:
-    """
-    Pre-compute the Δv cost for every ordered pair (i → j) of viewpoints.
-
-    This builds a square matrix so the RL environment can look up fuel costs
-    in O(1) during training instead of solving a linear system every step.
-
-    Parameters
-    ----------
-    viewpoints : np.ndarray, shape (N, 3)
-        Unit-sphere viewpoints (normalized, ‖p‖ ≈ 1).
-    travel_times : np.ndarray, shape (N, N)
-        Pre-computed travel times.  Element [i, j] is the time of flight
-        from viewpoint i to viewpoint j.
-    orbit_radius : float
-        Physical radius of the orbit (scales unit-sphere coords to real space).
-    mean_motion : float
-        Orbital mean motion n [rad / time-unit].
-
-    Returns
-    -------
-    delta_v_matrix : np.ndarray, shape (N, N), dtype float32
-        Element [i, j] = Δv needed to go from viewpoint i to viewpoint j.
-        Diagonal entries are 0 (no movement).
-        np.inf entries indicate dynamically infeasible transfers.
-
-    Example
-    -------
-    ::
-
-        dv_matrix = compute_delta_v_matrix(
-            viewpoints   = vp,           # (33, 3)
-            travel_times = tt,           # (33, 33)
-            orbit_radius = 1.0,
-            mean_motion  = 1.0,
-        )
-        fuel_cost = dv_matrix[current_view, next_view]
-    """
-    cw = CWDynamics(mean_motion)
-    n = viewpoints.shape[0]
-
-    delta_v_matrix = np.zeros((n, n), dtype=np.float32)
-
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                # Already at destination — no fuel needed
-                delta_v_matrix[i, j] = 0.0
-                continue
-
-            # Scale unit-sphere coords to actual orbital radius
-            r0 = viewpoints[i] * orbit_radius
-            rf = viewpoints[j] * orbit_radius
-            t = travel_times[i, j]
-
-            dv_total, _, _ = cw.compute_delta_v(r0, rf, t)
-            delta_v_matrix[i, j] = dv_total
-
-    logger.info(
-        f"Δv matrix computed: shape={delta_v_matrix.shape}, "
-        f"min={delta_v_matrix[delta_v_matrix > 0].min():.4f}, "
-        f"max={delta_v_matrix[delta_v_matrix < np.inf].max():.4f}, "
-        f"mean={delta_v_matrix[delta_v_matrix > 0].mean():.4f}"
-    )
-    return delta_v_matrix
-
 
 # =============================================================================
 # Quick self-test
