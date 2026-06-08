@@ -2,7 +2,6 @@ import numpy as np
 import gym
 from gym import spaces
 import envs.shapenet_reader as shapenet_reader
-import open3d as o3d
 import torch
 import sys
 import os
