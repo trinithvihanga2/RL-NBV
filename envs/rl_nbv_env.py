@@ -20,6 +20,7 @@ import logging
 from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, estimate_surface_normals
 from envs.rendering import EnvironmentRenderer
 from envs.state_transition.reward import calculate_continuous_reward
+from envs.state_transition.coverage import update_continuous_coverage
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -310,8 +311,8 @@ class PointCloudNextBestViewEnv(gym.Env):
         self._model_transition_cache = {}
         self._mesh_cache = {}
         self._initialize_state_transition_for_current_model(self.current_view)
-        self.current_points_cloud = self._get_points_from_position(
-            self.current_position
+        self.current_points_cloud = self.renderer.get_points_from_position(
+            self.current_position, self._canonical_points
         )
         self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
@@ -486,7 +487,16 @@ class PointCloudNextBestViewEnv(gym.Env):
                 self.current_points_cloud.shape[0], MAX_CLOUD_SIZE, replace=False
             )
             self.current_points_cloud = self.current_points_cloud[idx]
-        coverage_gain = self._update_coverage(new_view_points)
+        self._coverage_map, self.current_coverage, coverage_gain = update_continuous_coverage(
+            new_view_points,
+            self._canonical_tensor,
+            self._coverage_map,
+            self.current_coverage,
+            self.ground_truth_points_cloud_size,
+            self.COVERAGE_THRESHOLD,
+            ChamferDistanceFunction,
+            self.DEVICE,
+        )
 
         # 6. Update state
         self.current_position = new_position
@@ -572,8 +582,8 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self._initialize_state_transition_for_current_model(self.current_view)
 
-        self.current_points_cloud = self._get_points_from_position(
-            self.current_position
+        self.current_points_cloud = self.renderer.get_points_from_position(
+            self.current_position, self._canonical_points
         )
 
         observation = self._get_observation_space()
@@ -682,35 +692,6 @@ class PointCloudNextBestViewEnv(gym.Env):
             "cumulative_dv": self.cumulative_dv,
             "fuel_remaining": max(0.0, self.fuel_budget - self.cumulative_dv),
         }
-
-    def _update_coverage(self, new_points):
-        """Update coverage with new points and return coverage gain using persistent coverage map."""
-        if new_points.shape[0] == 0:
-            return 0.0
-
-        # Convert to tensors
-        new_points_tensor = torch.tensor(
-            new_points[np.newaxis, :, :].astype(np.float32)
-        ).to(self.DEVICE)
-
-        # Calculate distance from new points to ground truth using cached tensor
-        _, dist_to_gt = ChamferDistanceFunction.apply(
-            new_points_tensor, self._canonical_tensor
-        )
-
-        # dist_to_gt[i] = distance from canonical point i to nearest new point
-        newly_covered_mask = (
-            dist_to_gt.detach().cpu().numpy()[0] < self.COVERAGE_THRESHOLD
-        )
-
-        # Merge into persistent coverage map
-        self._coverage_map |= newly_covered_mask
-
-        prev_coverage = self.current_coverage
-        self.current_coverage = float(np.sum(self._coverage_map)) / max(
-            self.ground_truth_points_cloud_size, 1
-        )
-        return self.current_coverage - prev_coverage
 
     def _get_debug_info(self):
         self.logger.info(
