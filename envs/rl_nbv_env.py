@@ -246,10 +246,7 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self.cw = CWDynamics(self.orbit_config.mean_motion)
 
-        # In continuous environments, matrices are obsolete. 
         # Set max normalization bounds based on theoretical orbital limits.
-        self.travel_times = None
-        self.delta_v_matrix = None
         self.max_travel_time = float(self.orbit_config.total_time)
         # Max theoretical delta-v roughly scales with orbit velocity:
         v_orbit = self.orbit_config.mean_motion * self.orbit_config.orbit_radius
@@ -285,7 +282,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
 
         # State-transition runtime structures.
-        self.geometry_cache = {}
         self._transition_state = None
         self._canonical_points = np.zeros((0, 3), dtype=np.float32)
         self._model_transition_cache = {}
@@ -296,44 +292,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
         self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
-    def _build_visible_points_by_view(self, canonical_points):
-        point_count = canonical_points.shape[0]
-        visible_points = np.zeros((self.view_num, point_count), dtype=bool)
-        if point_count == 0:
-            return visible_points
-
-        canonical_tensor = canonical_points[np.newaxis, :, :].astype(np.float32)
-        canonical_tensor = torch.tensor(canonical_tensor).to(self.DEVICE)
-
-        for view_id in range(self.view_num):
-            view_points = self.shapenet_reader.get_point_cloud_by_view_id(view_id)
-            if view_points is None or view_points.shape[0] == 0:
-                continue
-            view_tensor = view_points[np.newaxis, :, :].astype(np.float32)
-            view_tensor = torch.tensor(view_tensor).to(self.DEVICE)
-            _, dist_to_canonical = ChamferDistanceFunction.apply(
-                view_tensor, canonical_tensor
-            )
-            visible_points[view_id] = (
-                dist_to_canonical.detach().cpu().numpy()[0] < self.COVERAGE_THRESHOLD
-            )
-
-        return visible_points
-
-    def _sync_legacy_coverage_buffers(self):
-        if self._transition_state is None:
-            return
-
-        coverage_map = np.asarray(self._transition_state["coverage_map"], dtype=bool)
-        self.current_points_cloud_from_gt = self._canonical_points[coverage_map]
-        self.ground_truth_points_cloud = self._canonical_points[~coverage_map]
-        self.ground_truth_tensor = self.ground_truth_points_cloud[
-            np.newaxis, :, :
-        ].astype(np.float32)
-        self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(
-            self.DEVICE
-        )
-
     def _initialize_state_transition_for_current_model(self, initial_view):
         model_name = self.shapenet_reader.get_model_info()
         cached_geometry = self._model_transition_cache.get(model_name)
@@ -342,30 +300,21 @@ class PointCloudNextBestViewEnv(gym.Env):
             self._canonical_points = np.asarray(
                 self.shapenet_reader.ground_truth, dtype=np.float32
             )
-            surface_normals = estimate_surface_normals(self._canonical_points)
-            visible_points_by_view = self._build_visible_points_by_view(
-                self._canonical_points
-            )
+            canonical_tensor = torch.tensor(
+                self._canonical_points[np.newaxis, :, :].astype(np.float32)
+            ).to(self.DEVICE)
+            
             cached_geometry = {
                 "canonical_points": self._canonical_points,
-                "surface_normals": surface_normals,
-                "visible_points_by_view": visible_points_by_view,
+                "canonical_tensor": canonical_tensor,
             }
             self._model_transition_cache[model_name] = cached_geometry
         else:
             self._canonical_points = cached_geometry["canonical_points"]
+            canonical_tensor = cached_geometry["canonical_tensor"]
 
         self.ground_truth_points_cloud_size = self._canonical_points.shape[0]
-        self.geometry_cache = {
-            "canonical_points": cached_geometry["canonical_points"],
-            "surface_normals": cached_geometry["surface_normals"],
-            "view_positions": self.viewpoints,
-            "travel_times_matrix": self.travel_times,
-            "visible_points_by_view": cached_geometry["visible_points_by_view"],
-        }
-        self._canonical_tensor = torch.tensor(
-            self._canonical_points[np.newaxis, :, :].astype(np.float32)
-        ).to(self.DEVICE)
+        self._canonical_tensor = canonical_tensor
         self._coverage_map = np.zeros(self.ground_truth_points_cloud_size, dtype=bool)
         self.current_coverage = 0.0
         self.coverage_add = 0.0
