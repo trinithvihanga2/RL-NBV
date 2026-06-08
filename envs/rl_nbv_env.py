@@ -501,6 +501,12 @@ class PointCloudNextBestViewEnv(gym.Env):
         # 6. Update state
         self.current_position = new_position
         self.current_time += travel_time
+        self.current_sun_position = calculate_sun_position(
+            action=0,
+            new_time=self.current_time,
+            prev_sun_position=self.initial_sun_position,
+            orbital_params=self.sun_orbital_params,
+        )
         self.cumulative_dv += delta_v
         self.step_cnt += 1
 
