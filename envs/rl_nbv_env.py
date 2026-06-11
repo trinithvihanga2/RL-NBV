@@ -21,8 +21,6 @@ from envs.state_transition.coverage import update_continuous_coverage
 from envs.state_transition.visibility import filter_lit_points
 from envs.state_transition.travel_time import advance_time
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
 # Maximum size for accumulated point cloud in continuous mode (prevents unbounded growth)
 MAX_CLOUD_SIZE = 8192
 
