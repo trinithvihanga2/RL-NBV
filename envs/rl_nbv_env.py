@@ -18,6 +18,12 @@ from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, es
 from envs.rendering import EnvironmentRenderer
 from envs.state_transition.reward import calculate_continuous_reward
 from envs.state_transition.coverage import update_continuous_coverage
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import io
+from PIL import Image
 from envs.state_transition.visibility import filter_lit_points
 from envs.state_transition.travel_time import advance_time
 
@@ -27,9 +33,12 @@ MAX_CLOUD_SIZE = 8192
 
 
 class PointCloudNextBestViewEnv(gym.Env):
+    metadata = {"render_modes": ["rgb_array"]}
+
     def __init__(
         self,
         data_path,
+        render_mode=None,
         observation_space_dim=-1,
         terminated_coverage=0.97,
         max_step=11,
@@ -58,6 +67,7 @@ class PointCloudNextBestViewEnv(gym.Env):
                             Higher value: penalize time more heavily
                             Lower value: focus more on coverage
         """
+        self.render_mode = render_mode
         self.COVERAGE_THRESHOLD = 0.00005
         self.is_ratio_reward = is_ratio_reward
         self.is_reward_with_cur_coverage = is_reward_with_cur_coverage
@@ -507,8 +517,52 @@ class PointCloudNextBestViewEnv(gym.Env):
     def close(self):
         pass
 
-    def render(sellf):
-        pass
+    def render(self, mode="rgb_array"):
+        if self.render_mode != "rgb_array" and mode != "rgb_array":
+            return None
+
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # Plot the full model as light transparent background
+        if hasattr(self, 'shapenet_reader') and self.shapenet_reader is not None:
+            model_pc = self.shapenet_reader.ground_truth
+            if model_pc is not None and len(model_pc) > 0:
+                ax.scatter(model_pc[:, 0], model_pc[:, 1], model_pc[:, 2], 
+                           c='lightgray', s=1, alpha=0.1, label='Ground Truth')
+
+        # Plot the accumulated points
+        if hasattr(self, 'current_points_cloud') and self.current_points_cloud is not None:
+            curr_pc = self.current_points_cloud
+            if len(curr_pc) > 0:
+                ax.scatter(curr_pc[:, 0], curr_pc[:, 1], curr_pc[:, 2], 
+                           c='blue', s=2, alpha=0.8, label='Accumulated PC')
+
+        # Plot the camera position
+        if hasattr(self, 'camera_position') and self.camera_position is not None:
+            cam = np.asarray(self.camera_position)
+            ax.scatter(cam[0], cam[1], cam[2], 
+                       c='red', s=100, marker='*', label='Camera Position')
+            ax.plot([0, cam[0]], [0, cam[1]], [0, cam[2]], c='red', linestyle='--', alpha=0.5)
+
+        ax.set_title(f"Step: {self.step_cnt}/{self.max_step} | Cov: {self.current_coverage*100:.1f}%")
+        ax.set_xlim([-1.5, 1.5])
+        ax.set_ylim([-1.5, 1.5])
+        ax.set_zlim([-1.5, 1.5])
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.legend(loc='upper right')
+
+        # Save to numpy array
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.1)
+        buf.seek(0)
+        plt.close(fig)
+        
+        img = Image.open(buf)
+        img_arr = np.array(img)
+        return img_arr
 
     def _caculate_current_coverage(self):
         return self.current_coverage
