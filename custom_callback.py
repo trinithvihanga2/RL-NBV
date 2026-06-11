@@ -2,7 +2,6 @@ import os
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
-
 class NextBestViewCustomCallback(BaseCallback):
     def __init__(
         self,
@@ -15,7 +14,6 @@ class NextBestViewCustomCallback(BaseCallback):
         save_freq=None,
         save_path=None,
         verbose: int = 1,
-        check_replay_buffer: bool = False,
     ):
         super(NextBestViewCustomCallback, self).__init__(verbose)
         self.output_file = output_file
@@ -25,38 +23,21 @@ class NextBestViewCustomCallback(BaseCallback):
         self.check_freq = check_freq
         self.cnt = 0
         self.best_coverage = -np.inf
-        self.check_replay_buffer = check_replay_buffer
         self.best_model_path = best_model_path
         self.save_freq = save_freq
-        self.save_path = save_path
+        self.save_path = save_path or "."
 
-    # check the repaly buffer
     def _init_callback(self) -> None:
         if self.save_path:
             os.makedirs(self.save_path, exist_ok=True)
-        # Ensure output file parent exists so open(..., "a+") won't fail
         if self.output_file:
             try:
                 os.makedirs(os.path.dirname(self.output_file) or ".", exist_ok=True)
             except Exception:
                 pass
-        
-        # Detect mode from environment
-        if hasattr(self.model.get_env(), 'envs'):
-            # VecEnv
-            self.continuous_mode = self.model.get_env().envs[0].continuous_mode
-        else:
-            # Single env
-            self.continuous_mode = self.model.get_env().continuous_mode
-        
-        if not self.check_replay_buffer:
-            return
-        self.model.replay_buffer.sample(32, env=self.model._vec_normalize_env)
 
     def _on_rollout_end(self) -> None:
-        if not self.check_replay_buffer:
-            return
-        self.model.replay_buffer.sample(32, env=self.model._vec_normalize_env)
+        pass
 
     def _on_step(self) -> bool:
         eval_due_to_checkpoint = False
@@ -82,7 +63,6 @@ class NextBestViewCustomCallback(BaseCallback):
             with open(self.output_file, "a+", encoding="utf-8") as f:
                 f.write("------ {} ------\n".format(self.cnt))
             self.cnt += 1
-            # self._caclulate_policy_detail()
             cur_coverage = self._caculate_average_coverage()
             if cur_coverage > self.best_coverage:
                 self.best_coverage = cur_coverage
@@ -94,54 +74,39 @@ class NextBestViewCustomCallback(BaseCallback):
                     self.model.save(self.best_model_path)
         return True
 
-    def _caclulate_policy_detail(self):
-        model_size = self.verify_env.shapenet_reader.model_num
-        init_step = 0
-        for model_id in range(model_size):
-            obs = self.verify_env.reset(init_step=init_step)
-            init_step = (init_step + 1) % self.verify_env.view_num
-            with open(self.output_file, "a+", encoding="utf-8") as f:
-                f.write(
-                    "{}: ({}) [0]{:.2f} ".format(
-                        self.verify_env.model_name,
-                        self.verify_env.current_view,
-                        self.verify_env.current_coverage * 100,
-                    )
-                )
-            for step_id in range(self.step_size - 1):
-                action, _states = self.model.predict(obs, deterministic=True)
-                obs, rewards, dones, info = self.verify_env.step(action)
-                with open(self.output_file, "a+", encoding="utf-8") as f:
-                    f.write(
-                        "({}) [{}]{:.2f} ".format(
-                            action, step_id + 1, info["current_coverage"] * 100
-                        )
-                    )
-            with open(self.output_file, "a+", encoding="utf-8") as f:
-                f.write("\n")
-
     def _caculate_average_coverage(self):
-        if self.continuous_mode:
-            return self._evaluate_continuous()
-        else:
-            return self._evaluate_discrete()
-
-    def _evaluate_discrete(self):
         model_size = self.test_env.shapenet_reader.model_num
-        init_step = 0
         average_coverage = np.zeros(self.step_size)
-        target_coverage = float(self.test_env.terminated_coverage)
+        
+        # In a generic test env, it may be wrapped. Use its underlying attribute if present, or assume a default.
+        if hasattr(self.test_env, 'terminated_coverage'):
+            target_coverage = float(self.test_env.terminated_coverage)
+        else:
+            target_coverage = 0.97
+            
         reached_view_counts = []
         for model_id in range(model_size):
-            obs = self.test_env.reset(init_step=init_step)
-            init_step = (init_step + 1) % self.test_env.view_num
+            obs = self.test_env.reset()
             coverages = np.zeros(self.step_size)
-            coverages[0] = self.test_env.current_coverage
+            
+            # test_env.current_coverage might not be directly accessible if it's a VecEnv
+            if hasattr(self.test_env, 'current_coverage'):
+                coverages[0] = self.test_env.current_coverage
+            else:
+                coverages[0] = 0.0 # Will be updated in step
+                
             average_coverage[0] += coverages[0]
             for step_id in range(self.step_size - 1):
                 action, _states = self.model.predict(obs, deterministic=True)
                 obs, rewards, dones, info = self.test_env.step(action)
-                coverages[step_id + 1] = info["current_coverage"]
+                
+                # Check if it's a VecEnv info (list of dicts) or a single env info (dict)
+                if isinstance(info, list) or isinstance(info, tuple):
+                    current_cov = info[0].get("current_coverage", 0.0)
+                else:
+                    current_cov = info.get("current_coverage", 0.0)
+                    
+                coverages[step_id + 1] = current_cov
                 average_coverage[step_id + 1] += coverages[step_id + 1]
 
             reached_indices = np.where(coverages >= target_coverage)[0]
@@ -203,31 +168,3 @@ class NextBestViewCustomCallback(BaseCallback):
                 )
 
         return average_coverage[self.step_size - 1]
-
-    def _evaluate_continuous(self):
-        """Evaluation for continuous mode."""
-        model_size = self.test_env.shapenet_reader.model_num
-        coverages = []
-        
-        for model_id in range(model_size):
-            obs = self.test_env.reset()
-            episode_coverage = []
-            
-            for step_id in range(self.step_size):
-                action, _states = self.model.predict(obs, deterministic=True)
-                obs, rewards, dones, info = self.test_env.step(action)
-                episode_coverage.append(info["current_coverage"])
-                if dones:
-                    break
-            
-            coverages.append(max(episode_coverage) if episode_coverage else 0.0)
-        
-        avg_coverage = np.mean(coverages) * 100
-        
-        with open(self.output_file, "a+", encoding="utf-8") as f:
-            f.write("average_coverage: {:.2f}%\n".format(avg_coverage))
-        
-        if self.verbose >= 1:
-            print("[Eval] average_coverage: {:.2f}%".format(avg_coverage))
-        
-        return avg_coverage

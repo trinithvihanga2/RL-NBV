@@ -4,12 +4,9 @@ import open3d as o3d
 
 
 class ShapenetReader:
-    def __init__(self, data_path, view_num, logger, is_cache=False):
+    def __init__(self, data_path, logger):
         self.is_intial = False
         self.data_path = data_path
-        self.view_num = view_num
-        self.is_cache = is_cache
-        self.view_points_cloud_list = []
         self.logger = logger
         self.logger.info("ShapenetReader is ok")
 
@@ -30,16 +27,6 @@ class ShapenetReader:
         self.model_num = len(self.model_list)
         self.set_model_id(0)
 
-        if is_cache:
-            for i in range(self.view_num):
-                file_path = os.path.join(
-                    self.data_path,
-                    self.model_list[self.cur_model_id],
-                    "{}.pcd".format(i),
-                )
-                points_cloud = o3d.io.read_point_cloud(file_path)
-                points_array = np.asarray(points_cloud.points)
-                self.view_points_cloud_list.append(points_array)
         self.is_intial = True
         self.logger.info(
             "data path exists: {}, model num: {}".format(data_path, self.model_num)
@@ -56,37 +43,11 @@ class ShapenetReader:
         )
         self.ground_truth = o3d.io.read_point_cloud(ground_truth_path)
         self.ground_truth = np.array(self.ground_truth.points)
-
-        if self.is_cache:
-            self.view_points_cloud_list.clear()
-            for i in range(self.view_num):
-                file_path = os.path.join(
-                    self.data_path,
-                    self.model_list[self.cur_model_id],
-                    "{}.pcd".format(i),
-                )
-                points_cloud = o3d.io.read_point_cloud(file_path)
-                points_array = np.asarray(points_cloud.points)
-                self.view_points_cloud_list.append(points_array)
-        # print("[INFO] current model id: {} model name: {}".format(model_id, self.cur_model_name))
         return True
 
     def get_next_model(self):
         model_id = (self.cur_model_id + 1) % self.model_num
         self.set_model_id(model_id)
-
-    def get_point_cloud_by_view_id(self, view_id):
-        if view_id >= self.view_num or view_id < 0:
-            self.logger.error("view_id {} mistake".format(view_id))
-            return None
-        if self.is_cache:
-            return self.view_points_cloud_list[view_id]
-        file_path = os.path.join(
-            self.data_path, self.model_list[self.cur_model_id], "{}.pcd".format(view_id)
-        )
-        points_cloud = o3d.io.read_point_cloud(file_path)
-        points_array = np.asarray(points_cloud.points)
-        return points_array
 
     def get_model_info(self):
         return self.cur_model_name

@@ -1,6 +1,6 @@
 import numpy as np
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import envs.shapenet_reader as shapenet_reader
 import torch
 import sys
@@ -32,9 +32,6 @@ class PointCloudNextBestViewEnv(gym.Env):
     def __init__(
         self,
         data_path,
-        viewpoints_path,
-        view_num=33,
-        begin_view=-1,
         observation_space_dim=-1,
         terminated_coverage=0.97,
         max_step=11,
@@ -88,13 +85,10 @@ class PointCloudNextBestViewEnv(gym.Env):
             real_data_path = os.path.join(data_path, str(env_id))
         self.data_path = real_data_path
         self.shapenet_reader = shapenet_reader.ShapenetReader(
-            real_data_path, view_num, self.logger, True
+            real_data_path, self.logger
         )
-        self.view_state = np.zeros(view_num, dtype=np.int32)
-        self.view_num = view_num
-        self.begin_view = begin_view
+
         self.max_step = max_step
-        self.current_view = 0
         self.action_history = []
         self.current_position = random_position_on_sphere()
         self.current_points_cloud = np.zeros((0, 3), dtype=np.float32)
@@ -106,7 +100,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.ground_truth_tensor = torch.tensor(self.ground_truth_tensor).to(
             self.DEVICE
         )
-        self.view_state[self.current_view] = 1
         self.observation_space_dim = observation_space_dim
         self.is_normalize = is_normalize
         self.current_time = 0.0
@@ -194,26 +187,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         }
         self.reward_config.update(dict(state_reward_config))
 
-        # ============================================================================
-        # TRAVEL TIME INITIALIZATION
-        # ============================================================================
-        # Load viewpoints from the required path
-        resolved_viewpoints_path = os.path.expanduser(viewpoints_path)
-        if not os.path.isabs(resolved_viewpoints_path):
-            resolved_viewpoints_path = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", resolved_viewpoints_path)
-            )
-
-        if not os.path.exists(resolved_viewpoints_path):
-            raise FileNotFoundError(
-                "viewpoints_path does not exist: {}".format(resolved_viewpoints_path)
-            )
-
-        self.viewpoints = np.loadtxt(resolved_viewpoints_path)  # Shape: (N, 3)
-        self.logger.info(
-            f"Loaded {self.viewpoints.shape[0]} viewpoints from {resolved_viewpoints_path}"
-        )
-
         # Initialize orbital configuration for travel time calculations
         # orbit_radius: 1.0 (unit sphere)
         # grav_param: 1.0 (dimensionless, controls orbital dynamics)
@@ -286,13 +259,13 @@ class PointCloudNextBestViewEnv(gym.Env):
         self._canonical_points = np.zeros((0, 3), dtype=np.float32)
         self._model_transition_cache = {}
         self._mesh_cache = {}
-        self._initialize_state_transition_for_current_model(self.current_view)
+        self._initialize_state_transition_for_current_model()
         self.current_points_cloud = self.renderer.get_points_from_position(
             self.current_position, self._canonical_points
         )
         self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
-    def _initialize_state_transition_for_current_model(self, initial_view):
+    def _initialize_state_transition_for_current_model(self):
         model_name = self.shapenet_reader.get_model_info()
         cached_geometry = self._model_transition_cache.get(model_name)
 
@@ -506,7 +479,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
 
         self.current_position = random_position_on_sphere()
-        self.current_view = 0
 
         # Re-initialize and synchronize sun direction with reset mission time.
         self.current_sun_position = calculate_sun_position(
@@ -523,7 +495,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             )
         )
 
-        self._initialize_state_transition_for_current_model(self.current_view)
+        self._initialize_state_transition_for_current_model()
 
         self.current_points_cloud = self.renderer.get_points_from_position(
             self.current_position, self._canonical_points
@@ -531,7 +503,7 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         observation = self._get_observation_space()
         info = self._get_info()
-        self.logger.debug("[reset] pass, init step: {}".format(self.current_view))
+        self.logger.debug("[reset] pass")
         return observation, info
 
     def close(self):

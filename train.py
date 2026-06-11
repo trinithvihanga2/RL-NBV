@@ -84,15 +84,10 @@ def config_to_args(config):
     ds = config.get("dataset", {})
     env = config.get("environment", {})
     train = config.get("training", {})
-    dqn = train.get("dqn", {})
     ppo = train.get("ppo", {})
     pre = train.get("pretrained", {})
-    rb = train.get("replay_buffer", {})
     out = train.get("output", {})
     log = train.get("logging", {})
-
-    # Add algorithm selection
-    algorithm = train.get("algorithm", "DQN")  # Default to DQN
 
     args = {
         # Dataset
@@ -100,8 +95,6 @@ def config_to_args(config):
         "verify_data_path": ds.get("verify_data_path"),
         "test_data_path": ds.get("test_data_path"),
         # Environment
-        "view_num": env.get("view_num", 33),
-        "begin_view": env.get("begin_view", -1),
         "observation_space_dim": env.get("observation_space_dim", 1024),
         "is_normalize": env.get("is_normalize", 1),
         "terminated_coverage": env.get("terminated_coverage", 0.97),
@@ -116,27 +109,13 @@ def config_to_args(config):
         "state_reward_config": env.get("state_reward", {}),
         "is_vec_env": env.get("is_vec_env", 0),
         "env_num": env.get("env_num", 8),
-        "viewpoints_path": env["viewpoints_path"],
         "sun_position_config": env.get("sun_position", {}),
         # Training
         "step_size": train.get("step_size", 10),
         "is_profile": train.get("is_profile", 0),
         "resume": train.get("resume", 0),
-        # NEW: Algorithm selection
-        "algorithm": algorithm,
-        # DQN
-        "device": dqn.get("device", "cuda:0"),
-        "learning_rate": dqn.get("learning_rate", 0.001),
-        "batch_size": dqn.get("batch_size", 128),
-        "buffer_size": dqn.get("buffer_size", 100000),
-        "learning_starts": dqn.get("learning_starts", 3000),
-        "exploration_fraction": dqn.get("exploration_fraction", 0.5),
-        "exploration_final_eps": dqn.get("exploration_final_eps", 0.2),
-        "gradient_steps": dqn.get("gradient_steps", 1),
-        "train_freq": dqn.get("train_freq", 16),
-        "gamma": dqn.get("gamma", 0.1),
-        "total_steps": dqn.get("total_steps", 500000),
-        # NEW: PPO config
+        # PPO config
+        "device": ppo.get("device", "cuda:0"),
         "ppo_learning_rate": ppo.get("learning_rate", 3e-4),
         "ppo_n_steps": ppo.get("n_steps", 2048),
         "ppo_batch_size": ppo.get("batch_size", 256),
@@ -152,13 +131,6 @@ def config_to_args(config):
         "is_transform": pre.get("is_transform", 0),
         "pretrained_model_path": pre.get("model_path", "null"),
         "is_freeze_fe": pre.get("is_freeze_fe", 0),
-        # Replay Buffer
-        "is_load_replay_buffer": rb.get("is_load_replay_buffer", 0),
-        "load_replay_buffer_path": rb.get("load_replay_buffer_path", "null"),
-        "is_save_replay_buffer": rb.get("is_save_replay_buffer", 0),
-        "save_replay_buffer_path": rb.get(
-            "save_replay_buffer_path", "dqn_replay_buffer.pkl"
-        ),
         # Output
         "output_file": out.get("output_file", "train_result.txt"),
         "checkpoint_path": out.get("checkpoint_path", "checkpoints/rl_nbv"),
@@ -221,12 +193,10 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
     average_coverage = np.zeros(step_size)
     target_coverage = float(env.terminated_coverage)
     reached_view_counts = []
-    init_step = 0
     logger.info("Calculating average coverage over {} models...".format(model_size))
 
     for model_id in range(model_size):
-        obs = env.reset(init_step=init_step)
-        init_step = (init_step + 1) % env.view_num
+        obs = env.reset()
         coverages = np.zeros(step_size)
         coverages[0] = env.current_coverage
         average_coverage[0] += coverages[0]
@@ -309,11 +279,10 @@ def load_checkpoint(checkpoint_path, train_env, policy_kwargs, logger):
     if not os.path.exists(checkpoint_path + ".zip"):
         logger.warning("No checkpoint found at: {}".format(checkpoint_path))
         return None
-    model = stable_baselines3.DQN.load(
+    model = stable_baselines3.PPO.load(
         path=checkpoint_path,
         env=train_env,
-        policy_kwargs=policy_kwargs,
-        policy="MultiInputPolicy",
+        device=train_env.device if hasattr(train_env, 'device') else 'auto'
     )
     logger.info("✅ Resumed from checkpoint: {}".format(checkpoint_path))
     return model
@@ -327,9 +296,6 @@ def make_env(data_path, env_id, logger_name, log_file, args):
         worker_logger = setup_worker_logger(logger_name, log_file)
         env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
             data_path=data_path,
-            viewpoints_path=args.viewpoints_path,
-            view_num=args.view_num,
-            begin_view=args.begin_view,
             observation_space_dim=args.observation_space_dim,
             is_normalize=(args.is_normalize == 1),
             terminated_coverage=args.terminated_coverage,
@@ -563,7 +529,7 @@ if __name__ == "__main__":
             if args.coverage_log_freq_profile is not None
             else 200
         )
-    total_steps = args.ppo_total_steps if args.algorithm == "PPO" else args.total_steps
+    total_steps = args.ppo_total_steps
     if args.is_profile == 1:
         total_steps = 2000
     logger.info("Total steps       : {}".format(total_steps))
@@ -587,9 +553,6 @@ if __name__ == "__main__":
     else:
         train_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
             data_path=args.train_data_path,
-            viewpoints_path=args.viewpoints_path,
-            view_num=args.view_num,
-            begin_view=args.begin_view,
             observation_space_dim=args.observation_space_dim,
             is_normalize=(args.is_normalize == 1),
             terminated_coverage=args.terminated_coverage,
@@ -608,9 +571,6 @@ if __name__ == "__main__":
 
     verify_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.verify_data_path,
-        viewpoints_path=args.viewpoints_path,
-        view_num=args.view_num,
-        begin_view=args.begin_view,
         observation_space_dim=args.observation_space_dim,
         is_normalize=(args.is_normalize == 1),
         terminated_coverage=args.terminated_coverage,
@@ -628,9 +588,6 @@ if __name__ == "__main__":
     )
     test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
         data_path=args.test_data_path,
-        viewpoints_path=args.viewpoints_path,
-        view_num=args.view_num,
-        begin_view=args.begin_view,
         observation_space_dim=args.observation_space_dim,
         is_normalize=(args.is_normalize == 1),
         terminated_coverage=args.terminated_coverage,
@@ -650,21 +607,12 @@ if __name__ == "__main__":
     log_gpu_memory(logger, tag="[after envs]")
 
     # ── Policy ────────────────────────────────────────────────────────────────
-    if args.algorithm == "PPO":
-        # PPO for continuous control
-        policy_kwargs = dict(
-            features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtractionContinuous,
-            features_extractor_kwargs=dict(features_dim=128),
-            net_arch=dict(pi=[256, 128], vf=[256, 128]),
-            optimizer_class=optim.adamw.AdamW,
-        )
-    else:
-        # DQN for discrete control
-        policy_kwargs = dict(
-            features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtraction,
-            features_extractor_kwargs=dict(features_dim=128),
-            optimizer_class=optim.adamw.AdamW,
-        )
+    policy_kwargs = dict(
+        features_extractor_class=models.pointnet2_cls_ssg.PointNetFeatureExtractionContinuous,
+        features_extractor_kwargs=dict(features_dim=128),
+        net_arch=dict(pi=[256, 128], vf=[256, 128]),
+        optimizer_class=optim.adamw.AdamW,
+    )
 
     # ── Model ─────────────────────────────────────────────────────────────────
     model = None
@@ -675,45 +623,25 @@ if __name__ == "__main__":
             logger.warning("No checkpoint — starting fresh")
 
     if model is None:
-        if args.algorithm == "PPO":
-            logger.info("Creating new PPO model...")
-            model = stable_baselines3.PPO(
-                policy="MultiInputPolicy",
-                env=train_env,
-                policy_kwargs=policy_kwargs,
-                learning_rate=linear_schedule(args.ppo_learning_rate),
-                n_steps=args.ppo_n_steps,
-                batch_size=args.ppo_batch_size,
-                n_epochs=args.ppo_n_epochs,
-                gamma=args.ppo_gamma,
-                gae_lambda=args.ppo_gae_lambda,
-                clip_range=args.ppo_clip_range,
-                ent_coef=args.ppo_ent_coef,
-                vf_coef=args.ppo_vf_coef,
-                max_grad_norm=args.ppo_max_grad_norm,
-                verbose=1,
-                device=args.device,
-            )
-            logger.info("PPO model created ✅")
-        else:
-            logger.info("Creating new DQN model...")
-            model = stable_baselines3.DQN(
-                policy="MultiInputPolicy",
-                env=train_env,
-                policy_kwargs=policy_kwargs,
-                verbose=1,
-                device=args.device,
-                learning_starts=args.learning_starts,
-                batch_size=args.batch_size,
-                buffer_size=args.buffer_size,
-                exploration_fraction=args.exploration_fraction,
-                exploration_final_eps=args.exploration_final_eps,
-                gradient_steps=args.gradient_steps,
-                learning_rate=linear_schedule(args.learning_rate),
-                train_freq=args.train_freq,
-                gamma=args.gamma,
-            )
-            logger.info("DQN model created ✅")
+        logger.info("Creating new PPO model...")
+        model = stable_baselines3.PPO(
+            policy="MultiInputPolicy",
+            env=train_env,
+            policy_kwargs=policy_kwargs,
+            learning_rate=linear_schedule(args.ppo_learning_rate),
+            n_steps=args.ppo_n_steps,
+            batch_size=args.ppo_batch_size,
+            n_epochs=args.ppo_n_epochs,
+            gamma=args.ppo_gamma,
+            gae_lambda=args.ppo_gae_lambda,
+            clip_range=args.ppo_clip_range,
+            ent_coef=args.ppo_ent_coef,
+            vf_coef=args.ppo_vf_coef,
+            max_grad_norm=args.ppo_max_grad_norm,
+            verbose=1,
+            device=args.device,
+        )
+        logger.info("PPO model created ✅")
 
     log_gpu_memory(logger, tag="[after model]")
 
@@ -723,16 +651,6 @@ if __name__ == "__main__":
         model = transfer_pretrained_weights(model, args, logger)
         if args.is_freeze_fe == 1:
             freeze_feature_extractor(model, logger)
-
-    # ── Replay buffer ─────────────────────────────────────────────────────────
-    if args.is_load_replay_buffer == 1:
-        if os.path.exists(args.load_replay_buffer_path):
-            model.load_replay_buffer(args.load_replay_buffer_path)
-            logger.info("Replay buffer loaded ✅")
-        else:
-            logger.error(
-                "Replay buffer not found: {}".format(args.load_replay_buffer_path)
-            )
 
     log_gpu_memory(logger, tag="[before training]")
 
@@ -794,10 +712,6 @@ if __name__ == "__main__":
     log_gpu_memory(logger, tag="[after training]")
 
     # ── Save + Evaluate ───────────────────────────────────────────────────────
-    if args.is_save_replay_buffer == 1:
-        model.save_replay_buffer(args.save_replay_buffer_path)
-        logger.info("Replay buffer saved")
-
     if args.is_save_model == 1:
         save_checkpoint(
             model, args.final_model_path, logger, timestep=model.num_timesteps

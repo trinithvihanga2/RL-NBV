@@ -11,13 +11,10 @@ dataset:
 
 # Environment
 environment:
-  view_num: 33
-  viewpoints_path: ./output/acrimsat_final/viewpoints_33.txt
-  begin_view: -1
   observation_space_dim: 1024
   is_normalize: 1
   terminated_coverage: 0.97
-  max_step: 30  # Increased for continuous episodes
+  max_step: 30
   is_ratio_reward: 1
   is_reward_with_cur_coverage: 0
   cur_coverage_ratio: 1.0
@@ -39,8 +36,6 @@ environment:
       angular_velocity_rad_per_s: 0.0
       initial_phase_rad: 0.0
       time_offset_s: 0.0
-  # Continuous mode parameter
-  continuous_mode: false  # Set to true for continuous control
 
 # Training
 training:
@@ -48,23 +43,8 @@ training:
   is_ratio_reward: 1
   is_profile: 0
   resume: 1
-  algorithm: DQN  # Options: DQN (discrete) or PPO (continuous)
 
-  # DQN Hyperparameters (used when algorithm: DQN)
-  dqn:
-    device: cuda:0
-    learning_rate: 0.001
-    batch_size: 128
-    buffer_size: 100000
-    learning_starts: 3000
-    exploration_fraction: 0.5
-    exploration_final_eps: 0.2
-    gradient_steps: 1
-    train_freq: 16
-    gamma: 0.1
-    total_steps: 500000
-
-  # PPO Hyperparameters (used when algorithm: PPO)
+  # PPO Hyperparameters
   ppo:
     device: cuda:0
     learning_rate: 0.0003
@@ -85,13 +65,6 @@ training:
     model_path: ./models/pretrained/pointnet2_ssg_wo_normals/checkpoints/best_model.pth
     is_freeze_fe: 0
 
-  # Replay Buffer
-  replay_buffer:
-    is_load_replay_buffer: 0
-    load_replay_buffer_path: ./artefacts/rbg/ideal_policy.pkl # Using the last generated replay buffer for training
-    is_save_replay_buffer: 1
-    save_replay_buffer_path: ./artefacts/train/dqn_replay_buffer.pkl
-
   # Saving & Output
   output:
     output_file: ./artefacts/train/train_result.txt
@@ -107,20 +80,6 @@ training:
     coverage_log_freq_normal: 50000
     coverage_log_freq_profile: 200
     progress_log_interval: 10
-
-# Replay Buffer Generation (Oracle Policy)
-replay_buffer_generation:
-  step_size: 10
-  buffer_size: 100000
-  save_path: ./artefacts/rbg/ideal_policy.pkl
-  log_path: ./artefacts/rbgreplay_buffer.log
-  is_load_buffer: 0
-  load_path: null
-  is_add_negative_exp: 1
-  negative_exp_factor: 0.03
-  is_ratio_reward: 0
-  is_reward_with_cur_coverage: 0
-  cur_coverage_ratio: 1.0
 
 # Dataset Splitting
 dataset_splitting:
