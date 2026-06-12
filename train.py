@@ -115,7 +115,6 @@ def config_to_args(config):
         "is_profile": train.get("is_profile", 0),
         "resume": train.get("resume", 0),
         # PPO config
-        "device": ppo.get("device", "cuda:0"),
         "ppo_learning_rate": ppo.get("learning_rate", 3e-4),
         "ppo_n_steps": ppo.get("n_steps", 2048),
         "ppo_batch_size": ppo.get("batch_size", 256),
@@ -513,7 +512,7 @@ if __name__ == "__main__":
     logger.info("=" * 60)
 
     # ── GPU Setup ─────────────────────────────────────────────────────────────
-    setup_gpu(args.device, logger)
+    setup_gpu("cuda:0", logger)
     log_gpu_memory(logger, tag="[startup]")
 
     # ── Training config ───────────────────────────────────────────────────────
@@ -639,7 +638,7 @@ if __name__ == "__main__":
             vf_coef=args.ppo_vf_coef,
             max_grad_norm=args.ppo_max_grad_norm,
             verbose=1,
-            device=args.device,
+            device="cuda:0",
         )
         logger.info("PPO model created ✅")
 

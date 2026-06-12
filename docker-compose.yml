@@ -2,6 +2,8 @@ services:
   trainer:
     build: .
     container_name: rl-nbv-trainer
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${GPU_ID:-0}
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./data:/app/data
@@ -11,7 +13,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              device_ids: ["${GPU_ID:-0}"]
               capabilities: [gpu]
     ipc: host
     ulimits:
