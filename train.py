@@ -727,11 +727,10 @@ if __name__ == "__main__":
         clear_gpu_memory(logger)
         log_gpu_memory(logger, tag="[after del model]")
 
-        model = stable_baselines3.DQN.load(
+        model = stable_baselines3.PPO.load(
             path=args.final_model_path,
             env=train_env,
-            policy_kwargs=policy_kwargs,
-            policy="MultiInputPolicy",
+            device="cuda:0"
         )
         logger.info("Model reloaded ✅")
 
