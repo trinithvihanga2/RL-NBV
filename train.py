@@ -408,25 +408,24 @@ def transfer_pretrained_weights(model, args, logger):
 
     checkpoint = torch.load(args.pretrained_model_path, weights_only=False)
     pretrained_dict = checkpoint["model_state_dict"]
-    qnet_dict = model.policy.q_net.state_dict()
-    update_dict = copy.deepcopy(qnet_dict)
+    
+    # In PPO, the policy holds the features extractor directly.
+    policy_dict = model.policy.state_dict()
+    update_dict = copy.deepcopy(policy_dict)
     updated_keys = []
     missing_keys = []
 
     for key in sorted(pretrained_dict.keys()):
         if key in ("fc3.bias", "fc3.weight"):
             continue
-        key_in_qnet = "features_extractor." + key
-        if key_in_qnet in update_dict:
-            update_dict[key_in_qnet] = pretrained_dict[key]
-            updated_keys.append(key_in_qnet)
+        key_in_policy = "features_extractor." + key
+        if key_in_policy in update_dict:
+            update_dict[key_in_policy] = pretrained_dict[key]
+            updated_keys.append(key_in_policy)
         else:
-            missing_keys.append(key_in_qnet)
+            missing_keys.append(key_in_policy)
 
-    model.policy.q_net.load_state_dict(update_dict)
-    model.policy.q_net_target.load_state_dict(update_dict)
-    model.q_net.load_state_dict(update_dict)
-    model.q_net_target.load_state_dict(update_dict)
+    model.policy.load_state_dict(update_dict)
 
     logger.info(
         "Pretrained weights loaded. Updated: {}, Missing: {}".format(
@@ -445,19 +444,13 @@ def transfer_pretrained_weights(model, args, logger):
 # FREEZE FEATURE EXTRACTOR
 # ============================================================================
 def freeze_feature_extractor(model, logger):
-    for net in [
-        model.policy.q_net,
-        model.policy.q_net_target,
-        model.q_net,
-        model.q_net_target,
+    for layer in [
+        model.policy.features_extractor.sa1,
+        model.policy.features_extractor.sa2,
+        model.policy.features_extractor.sa3,
     ]:
-        for layer in [
-            net.features_extractor.sa1,
-            net.features_extractor.sa2,
-            net.features_extractor.sa3,
-        ]:
-            for param in layer.parameters():
-                param.requires_grad = False
+        for param in layer.parameters():
+            param.requires_grad = False
     logger.info("Feature extractor frozen (sa1, sa2, sa3)")
 
 
