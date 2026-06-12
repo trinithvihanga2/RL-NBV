@@ -195,13 +195,13 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
     logger.info("Calculating average coverage over {} models...".format(model_size))
 
     for model_id in range(model_size):
-        obs = env.reset()
+        obs, _ = env.reset()
         coverages = np.zeros(step_size)
         coverages[0] = env.current_coverage
         average_coverage[0] += coverages[0]
         for step_id in range(step_size - 1):
             action, _states = model.predict(obs, deterministic=True)
-            obs, rewards, dones, info = env.step(action)
+            obs, rewards, terminated, truncated, info = env.step(action)
             coverages[step_id + 1] = info["current_coverage"]
             average_coverage[step_id + 1] += coverages[step_id + 1]
 

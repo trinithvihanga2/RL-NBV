@@ -382,7 +382,8 @@ class PointCloudNextBestViewEnv(gym.Env):
                 collision_min_clearance,
                 collision_penalty,
             )
-            return observation, reward, terminated, info
+            truncated = False
+            return observation, reward, terminated, truncated, info
 
         # Advance time and sun position to arrival
         self.current_time = advance_time(
@@ -462,7 +463,8 @@ class PointCloudNextBestViewEnv(gym.Env):
             collision_min_clearance=None,
         )
 
-        return observation, reward, terminated, info
+        truncated = False
+        return observation, reward, terminated, truncated, info
 
     # for greedy policy test
     def try_step(self, action):

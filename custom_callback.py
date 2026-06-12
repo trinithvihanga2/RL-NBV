@@ -86,7 +86,7 @@ class NextBestViewCustomCallback(BaseCallback):
             
         reached_view_counts = []
         for model_id in range(model_size):
-            obs = self.test_env.reset()
+            obs, _ = self.test_env.reset()
             coverages = np.zeros(self.step_size)
             
             # test_env.current_coverage might not be directly accessible if it's a VecEnv
@@ -98,7 +98,7 @@ class NextBestViewCustomCallback(BaseCallback):
             average_coverage[0] += coverages[0]
             for step_id in range(self.step_size - 1):
                 action, _states = self.model.predict(obs, deterministic=True)
-                obs, rewards, dones, info = self.test_env.step(action)
+                obs, rewards, terminated, truncated, info = self.test_env.step(action)
                 
                 # Check if it's a VecEnv info (list of dicts) or a single env info (dict)
                 if isinstance(info, list) or isinstance(info, tuple):
