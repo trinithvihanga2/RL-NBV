@@ -11,7 +11,13 @@ def main():
     parser.add_argument("--data_path", type=str, default="data/shapenet", help="Path to ShapeNet dataset")
     parser.add_argument("--output_dir", type=str, default="debug_renders", help="Directory to save PNGs")
     parser.add_argument("--episodes", type=int, default=1, help="Number of episodes to visualize")
+    parser.add_argument("--config", type=str, default="config.yaml", help="Path to config.yaml")
     args = parser.parse_args()
+    
+    import yaml
+    with open(args.config, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    env_config = config.get("environment", {})
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -19,7 +25,19 @@ def main():
     env_kwargs = {
         "data_path": args.data_path,
         "render_mode": "rgb_array",
-        "is_normalize": True,
+        "observation_space_dim": env_config.get("observation_space_dim", 1024),
+        "is_normalize": env_config.get("is_normalize", 1) == 1,
+        "terminated_coverage": env_config.get("terminated_coverage", 0.97),
+        "max_step": env_config.get("max_step", 30),
+        "is_ratio_reward": env_config.get("is_ratio_reward", 1) == 1,
+        "is_reward_with_cur_coverage": env_config.get("is_reward_with_cur_coverage", 0) == 1,
+        "cur_coverage_ratio": env_config.get("cur_coverage_ratio", 1.0),
+        "time_cost_weight": env_config.get("time_cost_weight", 1.0),
+        "fuel_budget": env_config.get("fuel_budget", 50.0),
+        "delta_v_weight": env_config.get("delta_v_weight", 1.0),
+        "sun_position_config": env_config.get("sun_position", {}),
+        "target_orbit_config": env_config.get("target_orbit", {}),
+        "state_reward_config": env_config.get("state_reward", {}),
     }
     
     # We use a single env instead of a vectorized env for easier rendering extraction
