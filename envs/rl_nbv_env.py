@@ -98,7 +98,7 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self.max_step = max_step
         self.action_history = []
-        self.current_position = random_position_on_sphere()
+        self.current_position = random_position_on_sphere(self.orbit_config.orbit_radius)
         self.current_points_cloud = np.zeros((0, 3), dtype=np.float32)
         self.ground_truth_points_cloud = self.shapenet_reader.ground_truth
         self.ground_truth_points_cloud_size = self.ground_truth_points_cloud.shape[0]
@@ -488,7 +488,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             f"[reset] Mission time reset to 0.0. Horizon: {self.orbit_config.total_time:.6f} time units"
         )
 
-        self.current_position = random_position_on_sphere()
+        self.current_position = random_position_on_sphere(self.orbit_config.orbit_radius)
 
         # Re-initialize and synchronize sun direction with reset mission time.
         self.current_sun_position = calculate_sun_position(

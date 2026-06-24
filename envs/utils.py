@@ -33,15 +33,14 @@ def normalize_pc(points, logger, name):
     return points
 
 
-def random_position_on_sphere():
-    """Generate random position on unit sphere using spherical coordinates."""
+def random_position_on_sphere(radius=1.0):
+    """Generate random position on sphere using spherical coordinates."""
     theta = np.random.uniform(0, np.pi)  # Polar angle [0, pi]
     phi = np.random.uniform(0, 2 * np.pi)  # Azimuthal angle [0, 2pi]
-    r = 1.0  # Unit sphere
 
-    x = r * np.sin(theta) * np.cos(phi)
-    y = r * np.sin(theta) * np.sin(phi)
-    z = r * np.cos(theta)
+    x = radius * np.sin(theta) * np.cos(phi)
+    y = radius * np.sin(theta) * np.sin(phi)
+    z = radius * np.cos(theta)
 
     return np.array([x, y, z], dtype=np.float32)
 

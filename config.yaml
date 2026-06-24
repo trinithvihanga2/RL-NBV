@@ -22,7 +22,7 @@ environment:
   delta_v_weight: 1.0
   fuel_budget: 50.0
   target_orbit:
-    orbit_radius: 1.0
+    orbit_radius: 1.12
     grav_param: 1.0
     num_orbits: 2.0
   state_reward:

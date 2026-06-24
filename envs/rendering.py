@@ -125,9 +125,7 @@ class EnvironmentRenderer:
             + end_position[np.newaxis, :] * samples[:, np.newaxis]
         )
         radii = np.linalg.norm(interpolated, axis=1)
-        collision_radius = float(
-            self.orbit_radius * MODEL_NORMALIZATION_SCALE
-        )
+        collision_radius = float(MODEL_NORMALIZATION_SCALE)
         min_clearance = float(np.min(radii) - collision_radius)
         if np.any(radii <= collision_radius):
             penetration = max(0.0, -min_clearance)
