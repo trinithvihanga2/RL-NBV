@@ -209,6 +209,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             grav_param=float(target_orbit_config.get("grav_param", 1.0)),
             num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
             min_transfer_time=float(target_orbit_config.get("min_transfer_time", 1e-6)),
+            unit_scale=float(target_orbit_config.get("unit_scale", 1.0)),
         )
         self.renderer = EnvironmentRenderer(self.data_path, self.shapenet_reader, self.orbit_config.orbit_radius, self.collision_check_samples, self.collision_penalty_weight, self.logger)
         self.action_space = spaces.Box(
@@ -337,8 +338,9 @@ class PointCloudNextBestViewEnv(gym.Env):
             travel_time = float(np.clip(requested_transfer_time, self.orbit_config.min_transfer_time, remaining_time))
 
         # 3. Compute Δv via CW dynamics (using pre-initialized instance)
-        r0 = self.current_position
-        rf = new_position
+        # Apply the real-world SI unit scale (e.g. 6.25m) so Delta-V is in SI units
+        r0 = self.current_position * self.orbit_config.unit_scale
+        rf = new_position * self.orbit_config.unit_scale
         delta_v, _, _ = self.cw.compute_delta_v(r0, rf, travel_time)
         if delta_v == np.inf:
             delta_v = self.max_delta_v  # fallback for singular transfers

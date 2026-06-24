@@ -27,6 +27,7 @@ class TargetOrbitConfig:
         grav_param: float = 1.0,
         num_orbits: float = 2.0,
         min_transfer_time: float = 1e-6,
+        unit_scale: float = 1.0,
     ):
         """
         Initialize target orbit configuration.
@@ -45,6 +46,7 @@ class TargetOrbitConfig:
         self.grav_param = grav_param
         self.num_orbits = num_orbits
         self.min_transfer_time = min_transfer_time
+        self.unit_scale = unit_scale
 
         # Mean motion (angular velocity of circular orbit)
         # n = sqrt(grav_param / orbit_radius^3)
