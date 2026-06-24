@@ -25,6 +25,7 @@ environment:
     orbit_radius: 1.12
     grav_param: 1.0
     num_orbits: 2.0
+    min_transfer_time: 0.1
   state_reward:
     revisit_penalty: -5.0
     coverage_coeff: 1.0

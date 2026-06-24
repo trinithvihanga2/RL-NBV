@@ -208,6 +208,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             orbit_radius=float(target_orbit_config.get("orbit_radius", 1.0)),
             grav_param=float(target_orbit_config.get("grav_param", 1.0)),
             num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
+            min_transfer_time=float(target_orbit_config.get("min_transfer_time", 1e-6)),
         )
         self.renderer = EnvironmentRenderer(self.data_path, self.shapenet_reader, self.orbit_config.orbit_radius, self.collision_check_samples, self.collision_penalty_weight, self.logger)
         self.action_space = spaces.Box(
@@ -333,7 +334,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         if remaining_time <= 0.0:
             travel_time = 0.0
         else:
-            travel_time = float(np.clip(requested_transfer_time, 1e-6, remaining_time))
+            travel_time = float(np.clip(requested_transfer_time, self.orbit_config.min_transfer_time, remaining_time))
 
         # 3. Compute Δv via CW dynamics (using pre-initialized instance)
         r0 = self.current_position
