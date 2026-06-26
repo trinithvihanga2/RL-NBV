@@ -44,7 +44,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         max_step=11,
         env_id=None,
         logger=logging.getLogger(__name__),
-        is_normalize=True,
         is_ratio_reward=False,
         is_reward_with_cur_coverage=False,
         cur_coverage_ratio=1.0,
@@ -124,78 +123,35 @@ class PointCloudNextBestViewEnv(gym.Env):
             self.DEVICE
         )
         self.observation_space_dim = observation_space_dim
-        self.is_normalize = is_normalize
         self.current_time = 0.0
 
         if observation_space_dim == -1:
-            self.observation_space = spaces.Dict(
-                {
-                    "current_point_cloud": spaces.Box(
-                        low=float("-inf"),
-                        high=float("inf"),
-                        shape=(512, 3),
-                        dtype=np.float64,
-                    ),
-                    "camera_position": spaces.Box(
-                        low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-                    ),
-                    "coverage": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                    "fuel_remaining": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                    "time_remaining": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                }
-            )
-        elif self.is_normalize:
-            self.observation_space = spaces.Dict(
-                {
-                    "current_point_cloud": spaces.Box(
-                        low=float("-1"),
-                        high=float("1"),
-                        shape=(3, observation_space_dim),
-                        dtype=np.float64,
-                    ),
-                    "camera_position": spaces.Box(
-                        low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-                    ),
-                    "coverage": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                    "fuel_remaining": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                    "time_remaining": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                }
-            )
+            shape = (512, 3)
         else:
-            self.observation_space = spaces.Dict(
-                {
-                    "current_point_cloud": spaces.Box(
-                        low=float("-inf"),
-                        high=float("inf"),
-                        shape=(3, observation_space_dim),
-                        dtype=np.float64,
-                    ),
-                    "camera_position": spaces.Box(
-                        low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-                    ),
-                    "coverage": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                    "fuel_remaining": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                    "time_remaining": spaces.Box(
-                        low=0.0, high=1.0, shape=(1,), dtype=np.float32
-                    ),
-                }
-            )
+            shape = (3, observation_space_dim)
+
+        self.observation_space = spaces.Dict(
+            {
+                "current_point_cloud": spaces.Box(
+                    low=-1.0,
+                    high=1.0,
+                    shape=shape,
+                    dtype=np.float64,
+                ),
+                "camera_position": spaces.Box(
+                    low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+                ),
+                "coverage": spaces.Box(
+                    low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+                ),
+                "fuel_remaining": spaces.Box(
+                    low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+                ),
+                "time_remaining": spaces.Box(
+                    low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+                ),
+            }
+        )
         self.current_coverage = 0.0
         self.coverage_add = 0.0
         self.step_cnt = 1
@@ -213,10 +169,8 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self.renderer = EnvironmentRenderer(self.data_path, self.shapenet_reader, self.orbit_config.orbit_radius, self.collision_check_samples, self.collision_penalty_weight, self.logger)
         self.action_space = spaces.Box(
-            low=np.array([0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array(
-                [np.pi, 2 * np.pi, self.orbit_config.total_time], dtype=np.float32
-            ),
+            low=-1.0,
+            high=1.0,
             shape=(3,),
             dtype=np.float32,
         )
@@ -305,23 +259,23 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
 
     def step(self, action):
-        return self._step_continuous(action)
-
-    def _step_continuous(self, action):
-        # action: [theta, phi, transfer_time]
-        # theta: polar angle [0, pi], phi: azimuthal angle [0, 2pi]
-        # transfer_time: requested time-of-flight in [0, orbit_config.total_time]
+        # action: [norm_theta, norm_phi, norm_transfer_time] all in [-1, 1]
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         if action.shape[0] != 3:
             raise ValueError(
-                "continuous action must have 3 elements [theta, phi, transfer_time], got {}".format(
+                "continuous action must have 3 elements, got {}".format(
                     action.shape[0]
                 )
             )
 
-        theta = float(np.clip(action[0], 0.0, np.pi))
-        phi = float(np.clip(action[1], 0.0, 2 * np.pi))
-        requested_transfer_time = float(action[2])
+        # Denormalize action from [-1, 1] to physical ranges
+        norm_theta = float(np.clip(action[0], -1.0, 1.0))
+        norm_phi = float(np.clip(action[1], -1.0, 1.0))
+        norm_time = float(np.clip(action[2], -1.0, 1.0))
+        
+        theta = (norm_theta + 1.0) * (np.pi / 2.0)
+        phi = (norm_phi + 1.0) * np.pi
+        requested_transfer_time = (norm_time + 1.0) * (self.orbit_config.total_time / 2.0)
 
         # Convert spherical to Cartesian coordinates
         r = self.orbit_config.orbit_radius
@@ -598,22 +552,21 @@ class PointCloudNextBestViewEnv(gym.Env):
                 self.logger,
                 self.model_name,
             )
-            if self.is_normalize:
-                cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
+            cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
             cur_pc = cur_pc.T
 
         return {
             "current_point_cloud": cur_pc.astype(np.float32),
             "camera_position": self.current_position.astype(np.float32),
-            "coverage": np.array([self.current_coverage], dtype=np.float32),
+            "coverage": np.array([self.current_coverage * 2.0 - 1.0], dtype=np.float32),
             "fuel_remaining": np.array(
-                [max(0.0, self.fuel_budget - self.cumulative_dv) / self.fuel_budget],
+                [(max(0.0, self.fuel_budget - self.cumulative_dv) / self.fuel_budget) * 2.0 - 1.0],
                 dtype=np.float32,
             ),
             "time_remaining": np.array(
                 [
-                    max(0.0, self.orbit_config.total_time - self.current_time)
-                    / self.orbit_config.total_time
+                    (max(0.0, self.orbit_config.total_time - self.current_time)
+                    / self.orbit_config.total_time) * 2.0 - 1.0
                 ],
                 dtype=np.float32,
             ),
