@@ -12,7 +12,6 @@ dataset:
 # Environment
 environment:
   observation_space_dim: 1024
-  is_normalize: 1
   terminated_coverage: 0.97
   max_step: 30
   is_ratio_reward: 1
