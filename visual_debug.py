@@ -26,7 +26,6 @@ def main():
         "data_path": args.data_path,
         "render_mode": "rgb_array",
         "observation_space_dim": env_config.get("observation_space_dim", 1024),
-        "is_normalize": env_config.get("is_normalize", 1) == 1,
         "terminated_coverage": env_config.get("terminated_coverage", 0.97),
         "max_step": env_config.get("max_step", 30),
         "is_ratio_reward": env_config.get("is_ratio_reward", 1) == 1,

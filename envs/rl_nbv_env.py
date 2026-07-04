@@ -498,13 +498,19 @@ class PointCloudNextBestViewEnv(gym.Env):
                            c='blue', s=2, alpha=0.8, label='Accumulated PC')
 
         # Plot the camera position
-        if hasattr(self, 'camera_position') and self.camera_position is not None:
-            cam = np.asarray(self.camera_position)
+        if hasattr(self, 'current_position') and self.current_position is not None:
+            cam = np.asarray(self.current_position)
             ax.scatter(cam[0], cam[1], cam[2], 
                        c='red', s=100, marker='*', label='Camera Position')
             ax.plot([0, cam[0]], [0, cam[1]], [0, cam[2]], c='red', linestyle='--', alpha=0.5)
 
-        ax.set_title(f"Step: {self.step_cnt}/{self.max_step} | Cov: {self.current_coverage*100:.1f}%")
+        # Plot the sun direction
+        if hasattr(self, 'current_sun_position') and self.current_sun_position is not None:
+            sun = np.asarray(self.current_sun_position)
+            ax.quiver(0, 0, 0, sun[0]*1.5, sun[1]*1.5, sun[2]*1.5, color='orange', arrow_length_ratio=0.1, label='Sun Direction', linewidth=2)
+
+        time_val = getattr(self, 'current_time', 0.0)
+        ax.set_title(f"Step: {self.step_cnt}/{self.max_step} | Cov: {self.current_coverage*100:.1f}% | Time: {time_val:.2f}")
         ax.set_xlim([-1.5, 1.5])
         ax.set_ylim([-1.5, 1.5])
         ax.set_zlim([-1.5, 1.5])
