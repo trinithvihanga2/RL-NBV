@@ -45,6 +45,8 @@ def main():
     print(f"Loading model from {args.model_path}")
     custom_objects = {
         "_last_obs": None,
+        "action_space": env.action_space,
+        "observation_space": env.observation_space,
     }
     model = PPO.load(args.model_path, env=env, custom_objects=custom_objects)
 
