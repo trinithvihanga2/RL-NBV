@@ -35,7 +35,7 @@ environment:
   sun_position:
     initial_direction: [1.0, 0.0, 0.0]
     orbital_params:
-      angular_velocity_rad_per_s: 0.0
+      angular_velocity_rad_per_s: 0.1
       initial_phase_rad: 0.0
       time_offset_s: 0.0
 
