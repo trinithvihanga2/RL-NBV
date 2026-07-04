@@ -97,6 +97,21 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         self.max_step = max_step
         self.action_history = []
+
+        # Initialize orbital configuration for travel time calculations
+        if target_orbit_config is None:
+            target_orbit_config = {}
+        if not isinstance(target_orbit_config, Mapping):
+            raise TypeError("target_orbit_config must be a mapping")
+
+        self.orbit_config = TargetOrbitConfig(
+            orbit_radius=float(target_orbit_config.get("orbit_radius", 1.0)),
+            grav_param=float(target_orbit_config.get("grav_param", 1.0)),
+            num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
+            min_transfer_time=float(target_orbit_config.get("min_transfer_time", 1e-6)),
+            unit_scale=float(target_orbit_config.get("unit_scale", 1.0)),
+        )
+
         self.current_position = random_position_on_sphere(self.orbit_config.orbit_radius)
         self.current_points_cloud = np.zeros((0, 3), dtype=np.float32)
         self.ground_truth_points_cloud = self.shapenet_reader.ground_truth
@@ -151,22 +166,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         }
         self.reward_config.update(dict(state_reward_config))
 
-        # Initialize orbital configuration for travel time calculations
-        # orbit_radius: 1.0 (unit sphere)
-        # grav_param: 1.0 (dimensionless, controls orbital dynamics)
-        # num_orbits: 2.0 (mission horizon = 2 complete orbits)
-        if target_orbit_config is None:
-            target_orbit_config = {}
-        if not isinstance(target_orbit_config, Mapping):
-            raise TypeError("target_orbit_config must be a mapping")
 
-        self.orbit_config = TargetOrbitConfig(
-            orbit_radius=float(target_orbit_config.get("orbit_radius", 1.0)),
-            grav_param=float(target_orbit_config.get("grav_param", 1.0)),
-            num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
-            min_transfer_time=float(target_orbit_config.get("min_transfer_time", 1e-6)),
-            unit_scale=float(target_orbit_config.get("unit_scale", 1.0)),
-        )
         self.renderer = EnvironmentRenderer(self.data_path, self.shapenet_reader, self.orbit_config.orbit_radius, self.collision_check_samples, self.collision_penalty_weight, self.logger)
         self.action_space = spaces.Box(
             low=-1.0,
