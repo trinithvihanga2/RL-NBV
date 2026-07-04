@@ -43,17 +43,24 @@ def main():
     env = PointCloudNextBestViewEnv(**env_kwargs)
     
     print(f"Loading model from {args.model_path}")
-    model = PPO.load(args.model_path, env=env)
+    custom_objects = {
+        "_last_obs": None,
+    }
+    model = PPO.load(args.model_path, env=env, custom_objects=custom_objects)
 
     for ep in range(args.episodes):
+        print(f"Starting episode {ep}...", flush=True)
         obs, info = env.reset()
         done = False
         step = 0
         
         # Save initial state
+        print("Rendering initial state...", flush=True)
         img_arr = env.render()
         if img_arr is not None:
-            Image.fromarray(img_arr).save(os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png"))
+            save_path = os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png")
+            Image.fromarray(img_arr).save(save_path)
+            print(f"Saved {save_path} - Initial", flush=True)
 
         while not done:
             action, _states = model.predict(obs, deterministic=True)
@@ -65,9 +72,9 @@ def main():
             if img_arr is not None:
                 save_path = os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png")
                 Image.fromarray(img_arr).save(save_path)
-                print(f"Saved {save_path} - Coverage: {info.get('current_coverage', 0)*100:.1f}%")
+                print(f"Saved {save_path} - Coverage: {info.get('current_coverage', 0)*100:.1f}%", flush=True)
                 
-        print(f"Episode {ep} finished at step {step} with final coverage: {info.get('current_coverage', 0)*100:.1f}%")
+        print(f"Episode {ep} finished at step {step} with final coverage: {info.get('current_coverage', 0)*100:.1f}%", flush=True)
 
 if __name__ == "__main__":
     main()
