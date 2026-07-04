@@ -455,6 +455,11 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         # 8. Check termination using _get_terminated for consistency
         terminated = self._get_terminated()
+        
+        # 9. Add completion bonus if the episode successfully terminated via coverage
+        if terminated and self.current_coverage >= self.terminated_coverage:
+            reward += 100.0
+            self.logger.debug("[REWARD] Added +100.0 completion bonus!")
 
         observation = self._get_observation_space()
         info = self._get_info(
