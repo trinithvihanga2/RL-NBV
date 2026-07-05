@@ -55,6 +55,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         sun_position_config=None,
         target_orbit_config=None,
         state_reward_config=None,
+        scp_planner_config=None,
     ):
         """
         Initialize Point Cloud Next Best View Environment.
@@ -183,7 +184,8 @@ class PointCloudNextBestViewEnv(gym.Env):
             self.orbit_config.num_orbits,
         )
 
-        self.cw = CWDynamics(self.orbit_config.mean_motion)
+        self.scp_planner_config = scp_planner_config or {}
+        self.cw = CWDynamics(self.orbit_config.mean_motion, scp_config=self.scp_planner_config)
 
         # Set max normalization bounds based on theoretical orbital limits.
         self.max_travel_time = float(self.orbit_config.total_time)

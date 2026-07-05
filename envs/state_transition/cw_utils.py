@@ -1,6 +1,6 @@
 """
-Clohessy-Wiltshire (CW) Dynamics Utility
-==========================================
+Clohessy-Wiltshire (CW) Dynamics & Trajectory Planner Utility
+=============================================================
 
 What is this?
 -------------
@@ -12,46 +12,35 @@ that is, the position of the spacecraft relative to a reference point that is
 already in a circular orbit around the target.
 
 This module provides:
-  - CWDynamics class : computes the continuous delta-v (Δv) needed to travel
-                       between any two orbital positions in a given time.
+  - CWDynamics class : A wrapper around a Sequential Convex Programming (SCP)
+                       trajectory planner that computes the minimum-fuel delta-v
+                       (Δv) needed to travel between two orbital positions while
+                       avoiding a spherical Keep-Out Zone (KOZ).
 
 Key concept — what is Δv?
 --------------------------
 Δv (delta-v) is the total change in velocity needed to make a manoeuvre.
-It is the standard "fuel cost" in astrodynamics:
-  - More Δv  →  more fuel burned  →  more expensive manoeuvre
-  - Less Δv  →  cheaper, more fuel-efficient path
+It is the standard "fuel cost" in astrodynamics.
 
-The CW state-transition matrix (STM)
+The Trajectory Planner (SCP)
 --------------------------------------
-Given:
-  r0  : initial relative position  (3-vector, in orbital-radius units)
-  v0  : initial relative velocity  (3-vector, we solve for this)
-  rf  : desired final position      (3-vector)
-  t   : time of flight              (scalar)
-
-The CW equations relate (r0, v0) → (rf, vf) linearly:
-
-  rf = Φ_rr(t) · r0  +  Φ_rv(t) · v0    … (position equation)
-  vf = Φ_vr(t) · r0  +  Φ_vv(t) · v0    … (velocity equation)
-
-We *know* r0 and rf.  We *want* to find v0.
-Rearranging the position equation:
-
-  Φ_rv(t) · v0 = rf − Φ_rr(t) · r0
-
-This is a 3×3 linear system.  Solving it gives v0.
-The total Δv = ‖v0‖ + ‖vf‖ (sum of initial and final velocity magnitudes).
+Instead of a simple 2-impulse direct transfer (which might cut through the
+target object), this module integrates the `fly_around_traj_gen` module.
+It sets up a convex optimization problem using CVXPY to find a multi-waypoint
+trajectory that minimizes the sum of velocity impulses (Δv) while strictly
+respecting dynamic constraints and the KOZ boundary.
 
 Units
 -----
 All quantities here are dimensionless (unit-sphere coordinates).
-Viewpoints on the unit sphere are scaled to orbit_radius before CW computation
+Viewpoints on the unit sphere are scaled to orbit_radius before computation
 so that the relative position vectors have physically correct magnitudes.
 """
 
 import numpy as np
 import logging
+
+from .fly_around_traj_gen import fly_around_traj_gen, FlyAroundOpts
 
 logger = logging.getLogger(__name__)
 
@@ -187,8 +176,15 @@ class CWDynamics:
         With our defaults (μ=1, a=1) this is 1.0.
     """
 
-    def __init__(self, mean_motion: float):
+    def __init__(self, mean_motion: float, scp_config: dict = {
+            "koz_radius": 0.95,
+            "alim": 1000.0,
+            "dt": 0.5,
+            "max_iter": 20,
+            "solver": "ECOS"
+        }):
         self.n = mean_motion
+        self.scp_config = scp_config
 
     # -------------------------------------------------------------------------
     def compute_delta_v(
@@ -198,18 +194,17 @@ class CWDynamics:
         t: float,
     ):
         """
-        Compute the Δv required to travel from r0 to rf in time t.
+        Compute the minimum-fuel Δv required to travel from r0 to rf in time t.
 
-        Algorithm (fly-around compatible)
-        ---------------------------------
-        1.  Build discrete CW matrices A, B such that
-            x1 = A x0 + B u0,
-            where x = [r; v] and u0 is an impulsive departure Δv.
-        2.  Assume current relative velocity is zero (x0 = [r0; 0]).
-        3.  Solve position endpoint constraint for u0 using the top block:
-            B_r · u0 = rf − A_rr · r0
-        4.  Propagate final velocity with x1 and use braking burn vf.
-        5.  Return Δv = ‖u0‖ + ‖vf‖.
+        Algorithm (SCP Fly-Around)
+        --------------------------
+        This function uses Sequential Convex Programming (SCP) to generate a
+        collision-free trajectory between r0 and rf around a Keep-Out Zone (KOZ).
+        
+        1. Formulates the boundary states: x0 = [r0, 0, 0, 0] and xf = [rf, 0, 0, 0].
+        2. Configures FlyAroundOpts with the selected convex solver (e.g. ECOS).
+        3. Calls `fly_around_traj_gen` to solve for the optimal multi-waypoint path.
+        4. Calculates the total Δv as the sum of L2 norms of all control impulses along the path.
 
         Parameters
         ----------
@@ -218,51 +213,50 @@ class CWDynamics:
         rf : np.ndarray, shape (3,)
             Final relative position (already scaled to orbit radius).
         t  : float
-            Time of flight.  Should be > 0; if 0 the spacecraft is already
+            Time of flight. Should be > 0; if 0 the spacecraft is already
             at the destination and Δv = 0 by definition.
 
         Returns
         -------
         delta_v : float
-            Total Δv = ‖v0‖ + ‖vf‖ (same units as r / time).
-            Returns np.inf if the manoeuvre is dynamically infeasible (e.g.
-            Φ_rv is singular at certain multiples of the orbital period).
+            Total Δv (sum of impulse norms). Returns np.inf if the manoeuvre is infeasible.
         v0 : np.ndarray or None
-            Required departure impulse vector u0. Returns None if infeasible.
-            When infeasible, the tuple returned is (np.inf, None, None).
+            The first control impulse vector from the generated trajectory.
+        vf : np.ndarray or None
+            The final control impulse vector from the generated trajectory.
         """
         # Trivial case: no movement needed
         if t <= 0.0:
             return 0.0, np.zeros(3), np.zeros(3)
 
-        A, B = _build_state_control_matrices(self.n, t)
-        A_rr = A[:3, :3]
-        B_r = B[:3, :]
-
-        # Guard against singular position-control map (occurs at t = k·π/n, i.e. every
-        # half orbital period — NOT every full period as is sometimes assumed).
-        if np.linalg.cond(B_r) > _COND_THRESHOLD:
-            logger.debug(
-                f"CW singular at t={t:.4f}  (likely t ≈ k·π/n). Returning Δv = inf."
-            )
-            return np.inf, None, None
-
-        # Endpoint equation from x1 = A x0 + B u0 with x0 = [r0; 0].
-        rhs = rf - A_rr @ r0
-
-        try:
-            v0 = np.linalg.solve(B_r, rhs)
-        except np.linalg.LinAlgError:
-            logger.debug(f"CW solve failed at t={t:.4f}. Returning Δv = inf.")
-            return np.inf, None, None
-
-        # Propagate to final state and use final velocity magnitude as braking burn.
+        # Construct FlyAroundOpts
+        opts = FlyAroundOpts(
+            n=self.n,
+            rKOZ=float(self.scp_config.get("koz_radius", 0.95)),
+            alim=float(self.scp_config.get("alim", 1000.0)),
+            dt=float(self.scp_config.get("dt", 0.5)),
+            max_iter=int(self.scp_config.get("max_iter", 20)),
+            solver=self.scp_config.get("solver", "ECOS")
+        )
+        
+        # Prepare start and end states [r, v] where v=0
         x0 = np.concatenate([r0, np.zeros(3)])
-        xf = A @ x0 + B @ v0
-        vf = xf[3:]
-
-        delta_v = float(np.linalg.norm(v0)) + float(np.linalg.norm(vf))
-        return delta_v, v0, vf
+        xf = np.concatenate([rf, np.zeros(3)])
+        
+        # Suppress verbose output
+        opts.verbose = False
+        
+        try:
+            traj, dvs, info = fly_around_traj_gen(x0, xf, t, opts)
+            if not info.get("feasible", False):
+                logger.debug(f"SCP planner failed at t={t:.4f}")
+                return np.inf, None, None
+                
+            delta_v = float(np.sum(np.linalg.norm(dvs, axis=1)))
+            return delta_v, dvs[0], dvs[-1]
+        except Exception as e:
+            logger.error(f"SCP planner exception: {e}")
+            return np.inf, None, None
 
     # -------------------------------------------------------------------------
     def compute_final_velocity(

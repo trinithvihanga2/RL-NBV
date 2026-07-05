@@ -1,6 +1,8 @@
 import argparse
 import os
+import numpy as np
 from PIL import Image
+import matplotlib.pyplot as plt
 
 from envs.rl_nbv_env import PointCloudNextBestViewEnv
 from stable_baselines3 import PPO
@@ -37,6 +39,7 @@ def main():
         "sun_position_config": env_config.get("sun_position", {}),
         "target_orbit_config": env_config.get("target_orbit", {}),
         "state_reward_config": env_config.get("state_reward", {}),
+        "scp_planner_config": env_config.get("scp_planner", {}),
     }
     
     # We use a single env instead of a vectorized env for easier rendering extraction
@@ -63,20 +66,63 @@ def main():
             save_path = os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png")
             Image.fromarray(img_arr).save(save_path)
             print(f"Saved {save_path} - Initial", flush=True)
+            
+        trajectory = [env.current_position.copy()]
 
         while not done:
             action, _states = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             step += 1
+            
+            trajectory.append(env.current_position.copy())
 
             img_arr = env.render()
             if img_arr is not None:
                 save_path = os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png")
                 Image.fromarray(img_arr).save(save_path)
-                print(f"Saved {save_path} - Coverage: {info.get('current_coverage', 0)*100:.1f}%", flush=True)
+                
+            fuel_pct = obs['fuel_remaining'][0] * 100
+            time_pct = obs['time_remaining'][0] * 100
+            cov_pct = info.get('current_coverage', 0) * 100
+            
+            print(f"Step {step:02d} | Action: {np.array2string(action, precision=2, suppress_small=True)} "
+                  f"| Reward: {reward:6.2f} | Cov: {cov_pct:4.1f}% | Fuel Rem: {fuel_pct:4.1f}% | Time Rem: {time_pct:4.1f}% "
+                  f"| Pos: {np.array2string(env.current_position, precision=2)}", flush=True)
                 
         print(f"Episode {ep} finished at step {step} with final coverage: {info.get('current_coverage', 0)*100:.1f}%", flush=True)
+        
+        # Plot trajectory on sphere
+        print(f"Plotting trajectory for episode {ep}...", flush=True)
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Draw wireframe sphere
+        u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+        r = env.orbit_config.orbit_radius
+        x = r * np.cos(u) * np.sin(v)
+        y = r * np.sin(u) * np.sin(v)
+        z = r * np.cos(v)
+        ax.plot_wireframe(x, y, z, color='gray', alpha=0.2)
+        
+        # Draw trajectory
+        traj = np.array(trajectory)
+        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 'r--', marker='o', markersize=4, linewidth=2, label='Trajectory')
+        
+        # Highlight start and end
+        ax.scatter(traj[0, 0], traj[0, 1], traj[0, 2], color='green', s=150, label='Start', zorder=5)
+        ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2], color='blue', s=150, label='End', zorder=5)
+        
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(f'Episode {ep} Trajectory (Coverage: {info.get("current_coverage", 0)*100:.1f}%)')
+        ax.legend()
+        
+        traj_save_path = os.path.join(args.output_dir, f"ep_{ep}_trajectory.png")
+        plt.savefig(traj_save_path, bbox_inches='tight', dpi=150)
+        plt.close(fig)
+        print(f"Saved trajectory plot to {traj_save_path}", flush=True)
 
 if __name__ == "__main__":
     main()

@@ -26,6 +26,12 @@ environment:
     num_orbits: 2.0
     min_transfer_time: 0.1
     unit_scale: 6.25
+  scp_planner:
+    koz_radius: 0.95
+    alim: 1000.0
+    dt: 0.5
+    max_iter: 20
+    solver: "ECOS"
   state_reward:
     revisit_penalty: -5.0
     coverage_coeff: 1.0
