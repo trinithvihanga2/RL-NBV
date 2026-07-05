@@ -185,6 +185,7 @@ class CWDynamics:
         }):
         self.n = mean_motion
         self.scp_config = scp_config
+        self.last_trajectory = None
 
     # -------------------------------------------------------------------------
     def compute_delta_v(
@@ -227,6 +228,7 @@ class CWDynamics:
         """
         # Trivial case: no movement needed
         if t <= 0.0:
+            self.last_trajectory = np.array([r0, rf])
             return 0.0, np.zeros(3), np.zeros(3)
 
         # Construct FlyAroundOpts
@@ -250,12 +252,15 @@ class CWDynamics:
             traj, dvs, info = fly_around_traj_gen(x0, xf, t, opts)
             if not info.get("feasible", False):
                 logger.debug(f"SCP planner failed at t={t:.4f}")
+                self.last_trajectory = None
                 return np.inf, None, None
                 
             delta_v = float(np.sum(np.linalg.norm(dvs, axis=1)))
+            self.last_trajectory = traj[:, :3]
             return delta_v, dvs[0], dvs[-1]
         except Exception as e:
             logger.error(f"SCP planner exception: {e}")
+            self.last_trajectory = None
             return np.inf, None, None
 
     # -------------------------------------------------------------------------

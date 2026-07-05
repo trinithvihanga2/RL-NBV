@@ -404,6 +404,14 @@ class PointCloudNextBestViewEnv(gym.Env):
         # 6. Update state
         self.current_position = new_position
         self.cumulative_dv += delta_v
+        
+        # 6.5 Update dense trajectory for plotting
+        if hasattr(self.cw, 'last_trajectory') and self.cw.last_trajectory is not None:
+            # Append all points except the first one (which matches current_position)
+            for pt in self.cw.last_trajectory[1:]:
+                self.full_trajectory.append(pt.copy())
+        else:
+            self.full_trajectory.append(self.current_position.copy())
         self.step_cnt += 1
 
         # 7. Compute reward using _get_reward for consistency
@@ -475,6 +483,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
 
         self.current_position = random_position_on_sphere(self.orbit_config.orbit_radius)
+        self.full_trajectory = [self.current_position.copy()]
 
         # Re-initialize and synchronize sun direction with reset mission time.
         self.current_sun_position = calculate_sun_position(

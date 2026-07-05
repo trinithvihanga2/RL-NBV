@@ -66,16 +66,12 @@ def main():
             save_path = os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png")
             Image.fromarray(img_arr).save(save_path)
             print(f"Saved {save_path} - Initial", flush=True)
-            
-        trajectory = [env.current_position.copy()]
 
         while not done:
             action, _states = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             step += 1
-            
-            trajectory.append(env.current_position.copy())
 
             img_arr = env.render()
             if img_arr is not None:
@@ -106,7 +102,7 @@ def main():
         ax.plot_wireframe(x, y, z, color='gray', alpha=0.2)
         
         # Draw trajectory
-        traj = np.array(trajectory)
+        traj = np.array(env.full_trajectory)
         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 'r--', marker='o', markersize=4, linewidth=2, label='Trajectory')
         
         # Highlight start and end
