@@ -163,6 +163,8 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.reward_config = {
             "revisit_penalty": -5.0,
             "coverage_coeff": 1.0,
+            "good_coverage_threshold": 0.01,
+            "near_distance_threshold": 0.2,
         }
         self.reward_config.update(dict(state_reward_config))
 
@@ -191,6 +193,9 @@ class PointCloudNextBestViewEnv(gym.Env):
 
         # Current mission time (starts at 0.0, increments as agent moves)
         self.current_time = 0.0
+        
+        # Track positions that yielded good coverage to penalize revisiting them
+        self.good_positions = []
 
         # ============================================================================
         # SUN POSITION INITIALIZATION
@@ -382,6 +387,18 @@ class PointCloudNextBestViewEnv(gym.Env):
             self.DEVICE,
         )
 
+        # 5.5 Check for revisiting near previously good positions
+        revisit_penalty_val = 0.0
+        if len(self.good_positions) > 0:
+            distances = np.linalg.norm(np.array(self.good_positions) - new_position, axis=1)
+            if np.min(distances) < self.reward_config.get("near_distance_threshold", 0.2):
+                revisit_penalty_val = self.reward_config.get("revisit_penalty", -5.0)
+                self.logger.debug(f"[REVISIT] Near a good position! Penalty: {revisit_penalty_val}")
+
+        # If coverage gain was good, remember this position
+        if coverage_gain >= self.reward_config.get("good_coverage_threshold", 0.01):
+            self.good_positions.append(new_position)
+
         # 6. Update state
         self.current_position = new_position
         self.cumulative_dv += delta_v
@@ -402,9 +419,13 @@ class PointCloudNextBestViewEnv(gym.Env):
             time_cost_weight=self.time_cost_weight,
             delta_v_weight=self.delta_v_weight,
         )
+        
+        # Apply revisit penalty if applicable (revisit_penalty_val is typically negative)
+        reward += revisit_penalty_val
+        
         self.logger.debug(
             f"[REWARD] coverage_gain={coverage_gain:7.4f}, travel_time={travel_time:7.4f}, "
-            f"delta_v={delta_v:7.4f}, collision_penalty=0.0, final={reward:7.4f}"
+            f"delta_v={delta_v:7.4f}, revisit={revisit_penalty_val}, final={reward:7.4f}"
         )
 
         # 8. Check termination using _get_terminated for consistency
@@ -440,6 +461,7 @@ class PointCloudNextBestViewEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         self.shapenet_reader.get_next_model()
         self.action_history.clear()
+        self.good_positions.clear()
         self.step_cnt = 1
         self.model_name = self.shapenet_reader.get_model_info()
 
