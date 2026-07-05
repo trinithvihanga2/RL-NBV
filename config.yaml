@@ -29,7 +29,7 @@ environment:
   state_reward:
     revisit_penalty: -5.0
     coverage_coeff: 1.0
-    good_coverage_threshold: 0.01
+    good_coverage_threshold: 0.1
     near_distance_threshold: 0.2
   is_vec_env: 1
   env_num: 8
