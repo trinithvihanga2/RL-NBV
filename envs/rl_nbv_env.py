@@ -191,7 +191,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.max_travel_time = float(self.orbit_config.total_time)
         # Max theoretical delta-v roughly scales with orbit velocity:
         v_orbit = self.orbit_config.mean_motion * self.orbit_config.orbit_radius
-        self.max_delta_v = float(2.0 * v_orbit)
+        self.max_delta_v = float(2.0 * v_orbit * self.orbit_config.unit_scale)
 
         # Current mission time (starts at 0.0, increments as agent moves)
         self.current_time = 0.0
