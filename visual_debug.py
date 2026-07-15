@@ -78,8 +78,8 @@ def main():
                 save_path = os.path.join(args.output_dir, f"ep_{ep}_step_{step:02d}.png")
                 Image.fromarray(img_arr).save(save_path)
                 
-            fuel_pct = obs['fuel_remaining'][0] * 100
-            time_pct = obs['time_remaining'][0] * 100
+            fuel_pct = (info.get('fuel_remaining', 0) / env.fuel_budget) * 100
+            time_pct = (max(0.0, env.orbit_config.total_time - info.get('mission_time', 0)) / env.orbit_config.total_time) * 100
             cov_pct = info.get('current_coverage', 0) * 100
             
             print(f"Step {step:02d} | Action: {np.array2string(action, precision=2, suppress_small=True)} "
