@@ -409,7 +409,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         if hasattr(self.cw, 'last_trajectory') and self.cw.last_trajectory is not None:
             # Append all points except the first one (which matches current_position)
             for pt in self.cw.last_trajectory[1:]:
-                self.full_trajectory.append(pt.copy())
+                self.full_trajectory.append(pt.copy() / self.orbit_config.unit_scale)
         else:
             self.full_trajectory.append(self.current_position.copy())
         self.step_cnt += 1
