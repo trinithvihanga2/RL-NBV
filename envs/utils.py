@@ -1,17 +1,31 @@
 import numpy as np
 
-def resample_pcd(pcd, n, logger, name):
-    """Drop or duplicate points so that pcd has exactly n points"""
+import open3d as o3d
+
+def resample_pcd(pcd, n, logger, name, voxel_size=0.05):
+    """Drop or duplicate points so that pcd has exactly n points, using voxel downsampling to normalize density."""
     if pcd.shape[0] == 0:
         logger.debug("observation source point cloud is empty, model: {}".format(name))
         return np.zeros((n, 3))
-    idx = np.random.permutation(pcd.shape[0])
-    if idx.shape[0] < n:
-        idx = np.concatenate(
-            [idx, np.random.randint(pcd.shape[0], size=n - pcd.shape[0])]
-        )
+        
+    opcd = o3d.geometry.PointCloud()
+    opcd.points = o3d.utility.Vector3dVector(pcd)
+    voxel_pcd = opcd.voxel_down_sample(voxel_size=voxel_size)
+    voxel_points = np.asarray(voxel_pcd.points)
+    
+    if voxel_points.shape[0] >= n:
+        idx = np.random.choice(voxel_points.shape[0], n, replace=False)
+        final_points = voxel_points[idx]
+    else:
+        pad_size = n - voxel_points.shape[0]
+        if voxel_points.shape[0] > 0:
+            pad_idx = np.random.choice(voxel_points.shape[0], pad_size, replace=True)
+            final_points = np.vstack((voxel_points, voxel_points[pad_idx]))
+        else:
+            final_points = np.zeros((n, 3))
+            
     logger.debug("resample_pcd from {} to {}, model: {}".format(pcd.shape[0], n, name))
-    return pcd[idx[:n]]
+    return final_points
 
 
 def normalize_pc(points, logger, name):
