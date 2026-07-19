@@ -22,6 +22,9 @@ dependencies = [
     "torchinfo",
     "cvxpy",
     "pandas",
+    "seaborn",
+    "jupyter",
+    "jupytext",
 ]
 
 [project.optional-dependencies]
