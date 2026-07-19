@@ -14,7 +14,7 @@ from envs.state_transition import (
     calculate_sun_position,
 )
 import logging
-from envs.utils import resample_pcd, normalize_pc, random_position_on_sphere, estimate_surface_normals
+from envs.utils import resample_pcd, random_position_on_sphere, estimate_surface_normals
 from envs.rendering import EnvironmentRenderer
 from envs.state_transition.reward import calculate_continuous_reward
 from envs.state_transition.coverage import update_continuous_coverage
@@ -585,7 +585,6 @@ class PointCloudNextBestViewEnv(gym.Env):
                 self.logger,
                 self.model_name,
             )
-            cur_pc = normalize_pc(cur_pc, self.logger, self.model_name)
             cur_pc = cur_pc.T
 
         return {
