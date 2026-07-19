@@ -58,6 +58,7 @@ def main():
         obs, info = env.reset()
         done = False
         step = 0
+        endpoints = [env.current_position.copy()]
         
         # Save initial state
         print("Rendering initial state...", flush=True)
@@ -72,6 +73,7 @@ def main():
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             step += 1
+            endpoints.append(env.current_position.copy())
 
             img_arr = env.render()
             if img_arr is not None:
@@ -106,6 +108,9 @@ def main():
         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 'r--', marker='o', markersize=4, linewidth=2, label='Trajectory')
         
         # Highlight start and end
+        endpoints_arr = np.array(endpoints)
+        ax.scatter(endpoints_arr[:, 0], endpoints_arr[:, 1], endpoints_arr[:, 2], color='orange', marker='X', s=100, label='Action Endpoints', zorder=4)
+        
         ax.scatter(traj[0, 0], traj[0, 1], traj[0, 2], color='green', s=150, label='Start', zorder=5)
         ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2], color='blue', s=150, label='End', zorder=5)
         
