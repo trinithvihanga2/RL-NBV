@@ -21,6 +21,7 @@ dependencies = [
     "torch",
     "torchinfo",
     "cvxpy",
+    "pandas",
 ]
 
 [project.optional-dependencies]
