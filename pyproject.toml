@@ -25,6 +25,7 @@ dependencies = [
     "seaborn",
     "jupyter",
     "jupytext",
+    "ecos>=2.0.14",
 ]
 
 [project.optional-dependencies]
