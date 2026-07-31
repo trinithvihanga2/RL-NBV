@@ -12,6 +12,7 @@ import os
 import sys
 import torch
 import copy
+import inspect
 import logging
 import gc
 import torch.backends.cudnn as cudnn
@@ -292,10 +293,46 @@ def load_checkpoint(checkpoint_path, train_env, policy_kwargs, logger):
 # ============================================================================
 # ENVIRONMENT
 # ============================================================================
+def create_nbv_env(log, **env_kwargs):
+    """Instantiate the NBV environment using only supported keywords.
+
+    The environment API has changed across repository revisions. In particular,
+    newer versions no longer accept ``is_normalize``. Filtering against the
+    installed class signature keeps train.py compatible while logging any stale
+    configuration fields instead of crashing every SubprocVecEnv worker.
+    """
+    env_class = envs.rl_nbv_env.PointCloudNextBestViewEnv
+    signature = inspect.signature(env_class.__init__)
+    parameters = signature.parameters
+
+    accepts_arbitrary_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if accepts_arbitrary_kwargs:
+        return env_class(**env_kwargs)
+
+    supported_names = {name for name in parameters if name != "self"}
+    unsupported_names = sorted(set(env_kwargs) - supported_names)
+    if unsupported_names:
+        log.warning(
+            "Ignoring unsupported PointCloudNextBestViewEnv arguments: %s",
+            ", ".join(unsupported_names),
+        )
+
+    filtered_kwargs = {
+        name: value
+        for name, value in env_kwargs.items()
+        if name in supported_names
+    }
+    return env_class(**filtered_kwargs)
+
+
 def make_env(data_path, env_id, logger_name, log_file, args):
     def _f():
         worker_logger = setup_worker_logger(logger_name, log_file)
-        env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+        env = create_nbv_env(
+            worker_logger,
             data_path=data_path,
             observation_space_dim=args.observation_space_dim,
             is_normalize=(args.is_normalize == 1),
@@ -546,7 +583,8 @@ if __name__ == "__main__":
         train_env = stable_baselines3.common.vec_env.SubprocVecEnv(env_list)
         logger.info("VecEnv: {} workers".format(args.env_num))
     else:
-        train_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+        train_env = create_nbv_env(
+            logger.getChild("train_env"),
             data_path=args.train_data_path,
             observation_space_dim=args.observation_space_dim,
             is_normalize=(args.is_normalize == 1),
@@ -565,7 +603,8 @@ if __name__ == "__main__":
             scp_planner_config=args.scp_planner_config,
         )
 
-    verify_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+    verify_env = create_nbv_env(
+        logger.getChild("verify_env"),
         data_path=args.verify_data_path,
         observation_space_dim=args.observation_space_dim,
         is_normalize=(args.is_normalize == 1),
@@ -583,7 +622,8 @@ if __name__ == "__main__":
         state_reward_config=args.state_reward_config,
         scp_planner_config=args.scp_planner_config,
     )
-    test_env = envs.rl_nbv_env.PointCloudNextBestViewEnv(
+    test_env = create_nbv_env(
+        logger.getChild("test_env"),
         data_path=args.test_data_path,
         observation_space_dim=args.observation_space_dim,
         is_normalize=(args.is_normalize == 1),

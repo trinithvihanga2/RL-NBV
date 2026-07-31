@@ -26,6 +26,7 @@ dependencies = [
     "jupyter",
     "jupytext",
     "ecos>=2.0.14",
+    "tensorboard>=2.21.0",
 ]
 
 [project.optional-dependencies]
