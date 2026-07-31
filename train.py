@@ -6,6 +6,7 @@ import yaml
 import stable_baselines3
 import stable_baselines3.common.vec_env
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
+from stable_baselines3.common.logger import configure
 import time
 import os
 import sys
@@ -639,6 +640,12 @@ if __name__ == "__main__":
             device="cuda:0",
         )
         logger.info("PPO model created ✅")
+
+    sb3_log_dir = os.path.join(os.path.dirname(args.checkpoint_path) or ".", "sb3_logs")
+    os.makedirs(sb3_log_dir, exist_ok=True)
+    sb3_logger = configure(sb3_log_dir, ["stdout", "log", "csv", "tensorboard"])
+    model.set_logger(sb3_logger)
+    logger.info("SB3 Logger configured: saving logs to {}".format(sb3_log_dir))
 
     log_gpu_memory(logger, tag="[after model]")
 
