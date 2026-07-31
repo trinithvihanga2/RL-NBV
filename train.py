@@ -724,7 +724,7 @@ if __name__ == "__main__":
         with open(args.output_file, "a+", encoding="utf-8") as f:
             f.write("------ Before Save ------\n")
         caculate_average_coverage(
-            test_env, model, args.step_size, args.output_file, logger
+            test_env, model, args.max_step, args.output_file, logger
         )
 
         logger.info("Clearing GPU before reload...")
@@ -742,7 +742,7 @@ if __name__ == "__main__":
         with open(args.output_file, "a+", encoding="utf-8") as f:
             f.write("------ After Save ------\n")
         caculate_average_coverage(
-            test_env, model, args.step_size, args.output_file, logger
+            test_env, model, args.max_step, args.output_file, logger
         )
 
     clear_gpu_memory(logger)

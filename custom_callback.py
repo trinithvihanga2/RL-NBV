@@ -19,7 +19,7 @@ class NextBestViewCustomCallback(BaseCallback):
         self.output_file = output_file
         self.verify_env = verify_env
         self.test_env = test_env
-        self.step_size = step_size
+        self.step_size = getattr(test_env, 'max_step', 30)
         self.check_freq = check_freq
         self.cnt = 0
         self.best_coverage = -np.inf
