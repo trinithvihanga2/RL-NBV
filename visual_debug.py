@@ -34,7 +34,7 @@ def main():
         "is_reward_with_cur_coverage": env_config.get("is_reward_with_cur_coverage", 0) == 1,
         "cur_coverage_ratio": env_config.get("cur_coverage_ratio", 1.0),
         "time_cost_weight": env_config.get("time_cost_weight", 1.0),
-        "fuel_budget": env_config.get("fuel_budget", 50.0),
+        "fuel_budget": env_config.get("fuel_budget", 100.0),
         "delta_v_weight": env_config.get("delta_v_weight", 1.0),
         "sun_position_config": env_config.get("sun_position", {}),
         "target_orbit_config": env_config.get("target_orbit", {}),

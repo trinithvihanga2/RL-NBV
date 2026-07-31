@@ -48,7 +48,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         is_reward_with_cur_coverage=False,
         cur_coverage_ratio=1.0,
         time_cost_weight=1.0,
-        fuel_budget=50.0,
+        fuel_budget=100.0,
         delta_v_weight=1.0,
         collision_penalty_weight=25.0,
         collision_check_samples=32,

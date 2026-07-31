@@ -105,7 +105,7 @@ def config_to_args(config):
         "cur_coverage_ratio": env.get("cur_coverage_ratio", 1.0),
         "time_cost_weight": env.get("time_cost_weight", 1.0),
         "delta_v_weight": env.get("delta_v_weight", 1.0),
-        "fuel_budget": env.get("fuel_budget", 50.0),
+        "fuel_budget": env.get("fuel_budget", 100.0),
         "target_orbit_config": env.get("target_orbit", {}),
         "state_reward_config": env.get("state_reward", {}),
         "scp_planner_config": env.get("scp_planner", {}),
