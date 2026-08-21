@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import itertools
 import os
 from typing import Any
 
@@ -8,8 +9,7 @@ import pandas as pd
 import yaml
 from stable_baselines3 import PPO
 
-# These imports are needed so custom classes used by the saved PPO model
-# are available when Stable-Baselines3 deserialises the checkpoint.
+# Custom imports required for SB3 model checkpoint deserialization
 import models.pointnet2_cls_ssg  # noqa: F401
 import optim.adamw  # noqa: F401
 from envs.rl_nbv_env import PointCloudNextBestViewEnv
@@ -31,15 +31,15 @@ class SpiralPolicy:
         denominator = max(1, self.steps - 1)
         progress = self.current_step / denominator
 
-        # Sweep from north to south.
+        # Sweep polar angle from north to south
         theta = -1.0 + 2.0 * progress
 
-        # Complete three azimuth rotations during the episode.
+        # Complete three azimuth rotations during the episode
         total_rotations = 3
         phi_progression = progress * total_rotations * 2.0
         phi = (phi_progression % 2.0) - 1.0
 
-        # Move as quickly as the action convention permits.
+        # Maximize speed convention
         time_action = -1.0
 
         self.current_step += 1
@@ -54,34 +54,52 @@ def as_bool(value: Any) -> bool:
     return bool(value)
 
 
-def create_env(data_path: str, config: dict) -> PointCloudNextBestViewEnv:
-    """Create an environment using only arguments supported by its current API."""
+def create_env(
+    data_path: str,
+    config: dict,
+    fuel_budget: float,
+    num_orbits: float,
+    max_step: int,
+    koz_radius: float = 0.95,
+) -> PointCloudNextBestViewEnv:
+    """Create an environment with operational parameters explicitly configured via matrix."""
     env_config = config.get("environment", {})
 
-    # `is_normalize` was intentionally removed. The current environment
-    # constructor does not accept it, which caused:
-    # TypeError: unexpected keyword argument 'is_normalize'
+    target_orbit_cfg = (
+        env_config.get("target_orbit", {}).copy()
+        if isinstance(env_config.get("target_orbit"), dict)
+        else {}
+    )
+    target_orbit_cfg["num_orbits"] = float(num_orbits)
+
+    scp_planner_cfg = (
+        env_config.get("scp_planner", {}).copy()
+        if isinstance(env_config.get("scp_planner"), dict)
+        else {}
+    )
+    if koz_radius is not None:
+        scp_planner_cfg["koz_radius"] = float(koz_radius)
+
     env_kwargs = {
         "data_path": data_path,
         "observation_space_dim": env_config.get("observation_space_dim", 1024),
         "terminated_coverage": env_config.get("terminated_coverage", 0.97),
-        "max_step": env_config.get("max_step", 30),
+        "max_step": int(max_step),
         "is_ratio_reward": as_bool(env_config.get("is_ratio_reward", 1)),
         "is_reward_with_cur_coverage": as_bool(
             env_config.get("is_reward_with_cur_coverage", 0)
         ),
         "cur_coverage_ratio": env_config.get("cur_coverage_ratio", 1.0),
         "time_cost_weight": env_config.get("time_cost_weight", 1.0),
-        "fuel_budget": env_config.get("fuel_budget", 100.0),
+        "fuel_budget": float(fuel_budget),
         "delta_v_weight": env_config.get("delta_v_weight", 1.0),
         "sun_position_config": env_config.get("sun_position", {}),
-        "target_orbit_config": env_config.get("target_orbit", {}),
+        "target_orbit_config": target_orbit_cfg,
         "state_reward_config": env_config.get("state_reward", {}),
-        "scp_planner_config": env_config.get("scp_planner", {}),
+        "scp_planner_config": scp_planner_cfg,
     }
 
-    # Protect the benchmark against other stale config keys after future
-    # environment API changes. Unsupported keys are reported and omitted.
+    # Filter out unsupported kwargs if the environment constructor signature changes
     signature = inspect.signature(PointCloudNextBestViewEnv.__init__)
     parameters = signature.parameters
     accepts_arbitrary_kwargs = any(
@@ -90,13 +108,10 @@ def create_env(data_path: str, config: dict) -> PointCloudNextBestViewEnv:
     )
 
     if not accepts_arbitrary_kwargs:
-        unsupported = sorted(
-            key for key in env_kwargs if key not in parameters
-        )
+        unsupported = sorted(key for key in env_kwargs if key not in parameters)
         if unsupported:
             print(
-                "Warning: PointCloudNextBestViewEnv does not accept "
-                f"{unsupported}; omitting them."
+                f"Warning: PointCloudNextBestViewEnv does not accept {unsupported}; omitting them."
             )
             env_kwargs = {
                 key: value
@@ -151,8 +166,7 @@ def normalise_action(action: Any, expected_size: int = 3) -> np.ndarray:
 
     if action_array.size < expected_size:
         raise ValueError(
-            f"Policy returned {action_array.size} action values; "
-            f"expected at least {expected_size}."
+            f"Policy returned {action_array.size} action values; expected at least {expected_size}."
         )
 
     return action_array
@@ -165,6 +179,10 @@ def initial_record(
     policy_name: str,
     model_name: str,
     loop_id: int,
+    config_fuel_budget: float,
+    config_num_orbits: float,
+    config_max_step: int,
+    config_koz_radius: float,
 ) -> dict:
     total_time = get_total_time(env)
     mission_time = scalar(info.get("mission_time"), 0.0)
@@ -172,31 +190,47 @@ def initial_record(
         info.get("current_coverage"),
         getattr(env, "current_coverage", 0.0),
     )
+    cam_x = get_vector_component(env, "current_position", 0)
+    cam_y = get_vector_component(env, "current_position", 1)
+    cam_z = get_vector_component(env, "current_position", 2)
+    view_dist = (
+        float(np.sqrt(cam_x**2 + cam_y**2 + cam_z**2))
+        if not np.isnan(cam_x)
+        else np.nan
+    )
 
     return {
         "dataset_split": split_name,
         "policy": policy_name,
         "model_name": model_name,
         "loop_id": loop_id,
+        "config_fuel_budget": config_fuel_budget,
+        "config_num_orbits": config_num_orbits,
+        "config_max_step": config_max_step,
+        "config_koz_radius": config_koz_radius,
         "step": 0,
         "coverage": coverage,
         "coverage_gain": 0.0,
-        "fuel_remaining": scalar(
-            info.get("fuel_remaining"),
-            getattr(env, "fuel_budget", 0.0),
-        ),
+        "cumulative_dv": 0.0,
+        "fuel_remaining": config_fuel_budget,
+        "fuel_consumed_fraction": 0.0,
+        "step_travel_time": 0.0,
+        "mission_time": 0.0,
         "time_remaining": max(0.0, total_time - mission_time),
         "reward": 0.0,
         "delta_v": 0.0,
         "action_theta": np.nan,
         "action_phi": np.nan,
         "action_time": np.nan,
-        "camera_x": get_vector_component(env, "current_position", 0),
-        "camera_y": get_vector_component(env, "current_position", 1),
-        "camera_z": get_vector_component(env, "current_position", 2),
+        "camera_x": cam_x,
+        "camera_y": cam_y,
+        "camera_z": cam_z,
+        "viewpoint_distance": view_dist,
         "sun_x": get_vector_component(env, "current_sun_position", 0),
         "sun_y": get_vector_component(env, "current_sun_position", 1),
         "sun_z": get_vector_component(env, "current_sun_position", 2),
+        "collision_detected": False,
+        "collision_min_clearance": np.nan,
         "is_terminated": False,
         "is_truncated": False,
     }
@@ -207,6 +241,7 @@ def run_evaluation(
     policy: Any,
     split_name: str,
     policy_name: str,
+    config_params: dict,
     num_loops: int = 1,
 ) -> list[dict]:
     records = []
@@ -215,11 +250,13 @@ def run_evaluation(
     if model_num <= 0:
         return records
 
-    max_steps = int(getattr(env, "max_step", 30))
+    max_steps = int(config_params.get("max_step", getattr(env, "max_step", 30)))
+    config_fuel_budget = float(config_params.get("fuel_budget", env.fuel_budget))
+    config_num_orbits = float(config_params.get("num_orbits", 2.0))
+    config_koz_radius = float(config_params.get("koz_radius", 0.95))
 
     for loop_id in range(num_loops):
-        # The reader advances to the next model during reset, so placing it at
-        # the final model makes the first reset select model zero.
+        # The reader advances to the next model during reset, so set to model_num - 1
         env.shapenet_reader.set_model_id(model_num - 1)
 
         for _ in range(model_num):
@@ -241,6 +278,10 @@ def run_evaluation(
                     policy_name=policy_name,
                     model_name=model_name,
                     loop_id=loop_id,
+                    config_fuel_budget=config_fuel_budget,
+                    config_num_orbits=config_num_orbits,
+                    config_max_step=max_steps,
+                    config_koz_radius=config_koz_radius,
                 )
             )
 
@@ -250,19 +291,13 @@ def run_evaluation(
 
             while not (terminated or truncated):
                 if step >= max_steps:
-                    print(
-                        f"Warning: {policy_name} exceeded max_step={max_steps} "
-                        f"on model {model_name}; stopping the episode."
-                    )
                     break
 
                 if policy_name == "Random":
                     action = env.action_space.sample()
                 else:
                     if policy is None:
-                        raise ValueError(
-                            f"Policy object is required for {policy_name}."
-                        )
+                        raise ValueError(f"Policy object required for {policy_name}.")
                     action, _ = policy.predict(obs, deterministic=True)
 
                 action = normalise_action(action)
@@ -283,6 +318,23 @@ def run_evaluation(
                 )
                 total_time = get_total_time(env)
                 mission_time = scalar(info.get("mission_time"), 0.0)
+                cum_dv = scalar(
+                    info.get("cumulative_dv"),
+                    getattr(env, "cumulative_dv", 0.0),
+                )
+                fuel_consumed_frac = (
+                    float(cum_dv / config_fuel_budget)
+                    if config_fuel_budget > 0
+                    else 0.0
+                )
+                cam_x = get_vector_component(env, "current_position", 0)
+                cam_y = get_vector_component(env, "current_position", 1)
+                cam_z = get_vector_component(env, "current_position", 2)
+                view_dist = (
+                    float(np.sqrt(cam_x**2 + cam_y**2 + cam_z**2))
+                    if not np.isnan(cam_x)
+                    else np.nan
+                )
 
                 records.append(
                     {
@@ -290,30 +342,31 @@ def run_evaluation(
                         "policy": policy_name,
                         "model_name": model_name,
                         "loop_id": loop_id,
+                        "config_fuel_budget": config_fuel_budget,
+                        "config_num_orbits": config_num_orbits,
+                        "config_max_step": max_steps,
+                        "config_koz_radius": config_koz_radius,
                         "step": step,
                         "coverage": current_coverage,
                         "coverage_gain": current_coverage - previous_coverage,
+                        "cumulative_dv": cum_dv,
                         "fuel_remaining": scalar(
                             info.get("fuel_remaining"),
-                            getattr(env, "fuel_budget", 0.0),
+                            max(0.0, config_fuel_budget - cum_dv),
                         ),
-                        "time_remaining": max(
-                            0.0, total_time - mission_time
-                        ),
+                        "fuel_consumed_fraction": fuel_consumed_frac,
+                        "step_travel_time": scalar(info.get("travel_time"), 0.0),
+                        "mission_time": mission_time,
+                        "time_remaining": max(0.0, total_time - mission_time),
                         "reward": scalar(reward),
                         "delta_v": scalar(info.get("delta_v"), 0.0),
                         "action_theta": float(action[0]),
                         "action_phi": float(action[1]),
                         "action_time": float(action[2]),
-                        "camera_x": get_vector_component(
-                            env, "current_position", 0
-                        ),
-                        "camera_y": get_vector_component(
-                            env, "current_position", 1
-                        ),
-                        "camera_z": get_vector_component(
-                            env, "current_position", 2
-                        ),
+                        "camera_x": cam_x,
+                        "camera_y": cam_y,
+                        "camera_z": cam_z,
+                        "viewpoint_distance": view_dist,
                         "sun_x": get_vector_component(
                             env, "current_sun_position", 0
                         ),
@@ -322,6 +375,12 @@ def run_evaluation(
                         ),
                         "sun_z": get_vector_component(
                             env, "current_sun_position", 2
+                        ),
+                        "collision_detected": bool(
+                            info.get("collision_detected", False)
+                        ),
+                        "collision_min_clearance": scalar(
+                            info.get("collision_min_clearance"), np.nan
                         ),
                         "is_terminated": terminated,
                         "is_truncated": truncated,
@@ -343,7 +402,9 @@ def get_data_paths(base_path: str) -> list[str]:
     ]
 
     if partition_paths:
-        return sorted(partition_paths, key=lambda path: int(os.path.basename(path)))
+        return sorted(
+            partition_paths, key=lambda path: int(os.path.basename(path))
+        )
 
     return [base_path]
 
@@ -353,18 +414,75 @@ def model_file_exists(model_path: str) -> bool:
     return os.path.isfile(model_path) or os.path.isfile(f"{model_path}.zip")
 
 
+# Default Curated Operational Matrix for Generalizability Evaluation
+DEFAULT_PARAMETER_MATRIX = [
+    # In-Distribution Baseline (Trained Regime)
+    {
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "InDist_100m_2orb",
+    },
+    # Extended Operational Envelope (Out-of-Distribution)
+    {
+        "fuel_budget": 200.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "OOD_200m_2orb",
+    },
+    {
+        "fuel_budget": 300.0,
+        "num_orbits": 3.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "OOD_300m_3orb",
+    },
+    {
+        "fuel_budget": 500.0,
+        "num_orbits": 5.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "OOD_500m_5orb",
+    },
+    {
+        "fuel_budget": 500.0,
+        "num_orbits": 5.0,
+        "max_step": 50,
+        "koz_radius": 0.95,
+        "label": "OOD_500m_5orb_Step50",
+    },
+    # Safety Standoff Sensitivity Matrix
+    {
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.85,
+        "label": "KOZ_0.85_Tight",
+    },
+    {
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 1.05,
+        "label": "KOZ_1.05_Wide",
+    },
+]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark the PPO agent and baseline policies on the "
-            "train, validation, and test splits."
+            "Benchmark PPO agent and baseline policies across a parameter matrix "
+            "to systematically evaluate generalizability."
         )
     )
     parser.add_argument(
         "--config",
         type=str,
         default="config.yaml",
-        help="Path to the YAML configuration file.",
+        help="Path to YAML configuration file (used for dataset/paths/model structure).",
     )
     parser.add_argument(
         "--model_path",
@@ -372,7 +490,7 @@ def main() -> None:
         dest="model_path",
         type=str,
         required=True,
-        help="Path to the trained PPO model, with or without .zip.",
+        help="Path to trained PPO checkpoint.",
     )
     parser.add_argument(
         "--output_dir",
@@ -380,7 +498,7 @@ def main() -> None:
         dest="output_dir",
         type=str,
         default="./artefacts/benchmark",
-        help="Directory for benchmark CSV output.",
+        help="Output directory for benchmark CSV files.",
     )
     parser.add_argument(
         "--loops",
@@ -388,6 +506,52 @@ def main() -> None:
         default=1,
         help="Number of evaluations per object and policy.",
     )
+
+    # CLI Parameter Matrix Options
+    parser.add_argument(
+        "--fuel_budgets",
+        nargs="+",
+        type=float,
+        default=None,
+        help="List of fuel budgets to evaluate (e.g. 100 200 300 500).",
+    )
+    parser.add_argument(
+        "--num_orbits",
+        nargs="+",
+        type=float,
+        default=None,
+        help="List of orbital period horizons to evaluate (e.g. 2 3 5).",
+    )
+    parser.add_argument(
+        "--max_steps",
+        nargs="+",
+        type=int,
+        default=None,
+        help="List of max episode step bounds to evaluate (e.g. 30 50).",
+    )
+    parser.add_argument(
+        "--koz_radii",
+        nargs="+",
+        type=float,
+        default=None,
+        help="List of KOZ standoff radii to evaluate (e.g. 0.85 0.95 1.05).",
+    )
+    parser.add_argument(
+        "--combos",
+        nargs="+",
+        type=str,
+        default=None,
+        help=(
+            "Explicit parameter tuples in format 'fuel,orbits,koz' or "
+            "'fuel,orbits,steps,koz' (e.g. --combos 100,3,0.85 300,2,1.05)."
+        ),
+    )
+    parser.add_argument(
+        "--grid_search",
+        action="store_true",
+        help="If set, evaluates the full Cartesian product grid of CLI parameter lists.",
+    )
+
     args = parser.parse_args()
 
     if args.loops < 1:
@@ -398,8 +562,7 @@ def main() -> None:
 
     if not model_file_exists(args.model_path):
         parser.error(
-            f"PPO model not found: {args.model_path} "
-            f"(also checked {args.model_path}.zip)"
+            f"PPO model not found: {args.model_path} (also checked {args.model_path}.zip)"
         )
 
     with open(args.config, "r", encoding="utf-8") as config_file:
@@ -414,101 +577,207 @@ def main() -> None:
         "Test": dataset_config.get("test_data_path", "./data/test"),
     }
 
+    # Construct the operational configuration matrix
+    if args.combos is not None:
+        matrix_configs = []
+        for combo_str in args.combos:
+            parts = [float(p.strip()) for p in combo_str.split(",") if p.strip()]
+            if len(parts) == 3:
+                f_b, n_o, k_r = parts
+                m_s = 30
+            elif len(parts) == 4:
+                f_b, n_o, m_s, k_r = parts
+                m_s = int(m_s)
+            else:
+                raise ValueError(
+                    f"Invalid combo format '{combo_str}'. Expected 'fuel,orbits,koz' or 'fuel,orbits,steps,koz'."
+                )
+            matrix_configs.append(
+                {
+                    "fuel_budget": f_b,
+                    "num_orbits": n_o,
+                    "max_step": m_s,
+                    "koz_radius": k_r,
+                    "label": f"Combo_{int(f_b)}m_{int(n_o)}orb_koz{k_r}",
+                }
+            )
+    elif (
+        args.fuel_budgets is not None
+        or args.num_orbits is not None
+        or args.max_steps is not None
+        or args.koz_radii is not None
+    ):
+        fuel_list = args.fuel_budgets or [100.0]
+        orbit_list = args.num_orbits or [2.0]
+        step_list = args.max_steps or [30]
+        koz_list = args.koz_radii or [0.95]
+
+        if args.grid_search:
+            matrix_configs = []
+            for f_b, n_o, m_s, k_r in itertools.product(
+                fuel_list, orbit_list, step_list, koz_list
+            ):
+                matrix_configs.append(
+                    {
+                        "fuel_budget": f_b,
+                        "num_orbits": n_o,
+                        "max_step": m_s,
+                        "koz_radius": k_r,
+                        "label": f"Matrix_{int(f_b)}m_{int(n_o)}orb_step{m_s}_koz{k_r}",
+                    }
+                )
+        else:
+            matrix_configs = []
+            max_len = max(
+                len(fuel_list),
+                len(orbit_list),
+                len(step_list),
+                len(koz_list),
+            )
+            for i in range(max_len):
+                f_b = fuel_list[i % len(fuel_list)]
+                n_o = orbit_list[i % len(orbit_list)]
+                m_s = step_list[i % len(step_list)]
+                k_r = koz_list[i % len(koz_list)]
+                matrix_configs.append(
+                    {
+                        "fuel_budget": f_b,
+                        "num_orbits": n_o,
+                        "max_step": m_s,
+                        "koz_radius": k_r,
+                        "label": f"Config_{i+1}_{int(f_b)}m_{int(n_o)}orb",
+                    }
+                )
+    else:
+        matrix_configs = DEFAULT_PARAMETER_MATRIX
+
+    print(
+        f"\n🚀 System Generalizability Benchmark initialized with {len(matrix_configs)} matrix configurations:"
+    )
+    for idx, cfg in enumerate(matrix_configs, 1):
+        print(
+            f"   [{idx}] {cfg['label']}: Fuel={cfg['fuel_budget']} m/s, "
+            f"Orbits={cfg['num_orbits']}, MaxSteps={cfg['max_step']}, KOZ={cfg['koz_radius']}"
+        )
+
     all_records = []
     ppo_model = None
 
-    for split_name, base_path in splits.items():
-        print("\n======================================")
-        print(f"--- Evaluating Split: {split_name} ---")
-        print("======================================")
+    for cfg_idx, cfg_params in enumerate(matrix_configs, 1):
+        f_budget = cfg_params["fuel_budget"]
+        n_orbits = cfg_params["num_orbits"]
+        m_step = cfg_params["max_step"]
+        k_radius = cfg_params["koz_radius"]
+        cfg_label = cfg_params["label"]
 
-        data_paths = get_data_paths(base_path)
-        if not data_paths:
-            print(f"Warning: Data path {base_path} does not exist. Skipping.")
-            continue
-
-        for data_path in data_paths:
-            print(f"-> Processing partition: {data_path}")
-            env = None
-
-            try:
-                env = create_env(data_path, config)
-                model_num = int(env.shapenet_reader.model_num)
-
-                if model_num <= 0:
-                    print(f"Warning: No models found in {data_path}. Skipping.")
-                    continue
-
-                if ppo_model is None:
-                    print("Loading PPO model...")
-                    custom_objects = {
-                        "action_space": env.action_space,
-                        "observation_space": env.observation_space,
-                    }
-                    ppo_model = PPO.load(
-                        args.model_path,
-                        custom_objects=custom_objects,
-                        device="auto",
-                    )
-
-                print(
-                    f"Running PPO on {split_name} dataset "
-                    f"({model_num} models)..."
-                )
-                all_records.extend(
-                    run_evaluation(
-                        env,
-                        ppo_model,
-                        split_name,
-                        "PPO",
-                        args.loops,
-                    )
-                )
-
-                print(f"Running Random Policy on {split_name} dataset...")
-                all_records.extend(
-                    run_evaluation(
-                        env,
-                        None,
-                        split_name,
-                        "Random",
-                        args.loops,
-                    )
-                )
-
-                print(
-                    f"Running Spiral Baseline Policy on "
-                    f"{split_name} dataset..."
-                )
-                spiral_policy = SpiralPolicy(
-                    steps_per_episode=getattr(env, "max_step", 30)
-                )
-                all_records.extend(
-                    run_evaluation(
-                        env,
-                        spiral_policy,
-                        split_name,
-                        "Spiral",
-                        args.loops,
-                    )
-                )
-
-            finally:
-                if env is not None and hasattr(env, "close"):
-                    env.close()
-
-    if not all_records:
-        raise RuntimeError(
-            "Benchmark produced no records. Check the configured dataset paths "
-            "and whether the partitions contain models."
+        print(
+            f"\n=========================================================================="
+        )
+        print(
+            f"=== MATRIX CONFIG [{cfg_idx}/{len(matrix_configs)}]: {cfg_label} ==="
+        )
+        print(
+            f"=== Fuel: {f_budget} m/s | Orbits: {n_orbits} | Steps: {m_step} | KOZ: {k_radius} ==="
+        )
+        print(
+            f"=========================================================================="
         )
 
+        for split_name, base_path in splits.items():
+            print(f"\n--- Evaluating Split: {split_name} ---")
+
+            data_paths = get_data_paths(base_path)
+            if not data_paths:
+                print(
+                    f"Warning: Data path {base_path} does not exist. Skipping."
+                )
+                continue
+
+            for data_path in data_paths:
+                print(f"-> Processing partition: {data_path}")
+                env = None
+
+                try:
+                    env = create_env(
+                        data_path=data_path,
+                        config=config,
+                        fuel_budget=f_budget,
+                        num_orbits=n_orbits,
+                        max_step=m_step,
+                        koz_radius=k_radius,
+                    )
+                    model_num = int(env.shapenet_reader.model_num)
+
+                    if model_num <= 0:
+                        print(
+                            f"Warning: No models found in {data_path}. Skipping."
+                        )
+                        continue
+
+                    if ppo_model is None:
+                        print("Loading PPO model checkpoint...")
+                        custom_objects = {
+                            "action_space": env.action_space,
+                            "observation_space": env.observation_space,
+                        }
+                        ppo_model = PPO.load(
+                            args.model_path,
+                            custom_objects=custom_objects,
+                            device="auto",
+                        )
+
+                    print(
+                        f"Running PPO on {split_name} ({model_num} models)..."
+                    )
+                    all_records.extend(
+                        run_evaluation(
+                            env=env,
+                            policy=ppo_model,
+                            split_name=split_name,
+                            policy_name="PPO",
+                            config_params=cfg_params,
+                            num_loops=args.loops,
+                        )
+                    )
+
+                    print(f"Running Random Policy on {split_name}...")
+                    all_records.extend(
+                        run_evaluation(
+                            env=env,
+                            policy=None,
+                            split_name=split_name,
+                            policy_name="Random",
+                            config_params=cfg_params,
+                            num_loops=args.loops,
+                        )
+                    )
+
+                    print(f"Running Spiral Baseline Policy on {split_name}...")
+                    spiral_policy = SpiralPolicy(steps_per_episode=m_step)
+                    all_records.extend(
+                        run_evaluation(
+                            env=env,
+                            policy=spiral_policy,
+                            split_name=split_name,
+                            policy_name="Spiral",
+                            config_params=cfg_params,
+                            num_loops=args.loops,
+                        )
+                    )
+
+                finally:
+                    if env is not None and hasattr(env, "close"):
+                        env.close()
+
+    if not all_records:
+        raise RuntimeError("Benchmark produced no records.")
+
     dataframe = pd.DataFrame(all_records)
-    csv_path = os.path.join(args.output_dir, "benchmark_raw_data.csv")
+    csv_path = os.path.join(args.output_dir, "benchmark_raw_data_matrix.csv")
     dataframe.to_csv(csv_path, index=False)
 
-    print(f"\nBenchmark complete! Raw data saved to {csv_path}")
-    print(f"Rows written: {len(dataframe)}")
+    print(f"\n🎉 Benchmark complete! Raw matrix data saved to {csv_path}")
+    print(f"Total Rows Written: {len(dataframe)}")
 
 
 if __name__ == "__main__":
