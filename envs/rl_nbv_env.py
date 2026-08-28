@@ -52,7 +52,6 @@ class PointCloudNextBestViewEnv(gym.Env):
         delta_v_weight=1.0,
         collision_penalty_weight=25.0,
         collision_check_samples=32,
-        object_scale=0.8,
         sun_position_config=None,
         target_orbit_config=None,
         state_reward_config=None,
@@ -171,17 +170,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.reward_config.update(dict(state_reward_config))
 
 
-        self.object_scale = float(object_scale)
-
-        self.renderer = EnvironmentRenderer(
-            self.data_path,
-            self.shapenet_reader,
-            self.orbit_config.orbit_radius,
-            self.collision_check_samples,
-            self.collision_penalty_weight,
-            self.logger,
-            object_scale=self.object_scale,
-        )
+        self.renderer = EnvironmentRenderer(self.data_path, self.shapenet_reader, self.orbit_config.orbit_radius, self.collision_check_samples, self.collision_penalty_weight, self.logger)
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -252,19 +241,9 @@ class PointCloudNextBestViewEnv(gym.Env):
         cached_geometry = self._model_transition_cache.get(model_name)
 
         if cached_geometry is None:
-            canonical_raw = np.asarray(
+            self._canonical_points = np.asarray(
                 self.shapenet_reader.ground_truth, dtype=np.float32
             )
-            max_dist = (
-                float(np.max(np.linalg.norm(canonical_raw, axis=1)))
-                if canonical_raw.shape[0] > 0
-                else 0.0
-            )
-            if max_dist > 0.0:
-                self._canonical_points = canonical_raw * (self.object_scale / max_dist)
-            else:
-                self._canonical_points = canonical_raw
-
             canonical_tensor = torch.tensor(
                 self._canonical_points[np.newaxis, :, :].astype(np.float32)
             ).to(self.DEVICE)

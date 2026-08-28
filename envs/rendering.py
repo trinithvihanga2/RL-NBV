@@ -12,23 +12,13 @@ PARTIAL_RENDER_CY = 239.5
 MODEL_NORMALIZATION_SCALE = 0.8
 
 class EnvironmentRenderer:
-    def __init__(
-        self,
-        data_path,
-        shapenet_reader,
-        orbit_radius,
-        collision_check_samples,
-        collision_penalty_weight,
-        logger,
-        object_scale=MODEL_NORMALIZATION_SCALE,
-    ):
+    def __init__(self, data_path, shapenet_reader, orbit_radius, collision_check_samples, collision_penalty_weight, logger):
         self.data_path = data_path
         self.shapenet_reader = shapenet_reader
         self.orbit_radius = orbit_radius
         self.collision_check_samples = collision_check_samples
         self.collision_penalty_weight = collision_penalty_weight
         self.logger = logger
-        self.object_scale = float(object_scale)
         self._mesh_cache = {}
 
     def _resolve_current_model_mesh_path(self):
@@ -73,7 +63,7 @@ class EnvironmentRenderer:
         vertices = np.asarray(mesh.vertices)
         max_dist = float(np.max(np.linalg.norm(vertices, axis=1)))
         if max_dist > 0.0:
-            mesh.scale(self.object_scale / max_dist, center=(0, 0, 0))
+            mesh.scale(MODEL_NORMALIZATION_SCALE / max_dist, center=(0, 0, 0))
         mesh.compute_vertex_normals()
 
         self._mesh_cache[model_name] = mesh
@@ -135,7 +125,7 @@ class EnvironmentRenderer:
             + end_position[np.newaxis, :] * samples[:, np.newaxis]
         )
         radii = np.linalg.norm(interpolated, axis=1)
-        collision_radius = float(self.object_scale)
+        collision_radius = float(MODEL_NORMALIZATION_SCALE)
         min_clearance = float(np.min(radii) - collision_radius)
         if np.any(radii <= collision_radius):
             penetration = max(0.0, -min_clearance)

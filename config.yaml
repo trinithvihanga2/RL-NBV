@@ -20,7 +20,6 @@ environment:
   time_cost_weight: 1.0
   delta_v_weight: 1.0
   fuel_budget: 100.0
-  object_scale: 0.8
   target_orbit:
     orbit_radius: 1.12
     grav_param: 1.0

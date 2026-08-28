@@ -61,7 +61,6 @@ def create_env(
     num_orbits: float,
     max_step: int,
     koz_radius: float = 0.95,
-    object_scale: float = 0.8,
 ) -> PointCloudNextBestViewEnv:
     """Create an environment with operational parameters explicitly configured via matrix."""
     env_config = config.get("environment", {})
@@ -94,7 +93,6 @@ def create_env(
         "time_cost_weight": env_config.get("time_cost_weight", 1.0),
         "fuel_budget": float(fuel_budget),
         "delta_v_weight": env_config.get("delta_v_weight", 1.0),
-        "object_scale": float(object_scale),
         "sun_position_config": env_config.get("sun_position", {}),
         "target_orbit_config": target_orbit_cfg,
         "state_reward_config": env_config.get("state_reward", {}),
@@ -185,7 +183,6 @@ def initial_record(
     config_num_orbits: float,
     config_max_step: int,
     config_koz_radius: float,
-    config_object_scale: float = 0.8,
 ) -> dict:
     total_time = get_total_time(env)
     mission_time = scalar(info.get("mission_time"), 0.0)
@@ -211,7 +208,6 @@ def initial_record(
         "config_num_orbits": config_num_orbits,
         "config_max_step": config_max_step,
         "config_koz_radius": config_koz_radius,
-        "config_object_scale": config_object_scale,
         "step": 0,
         "coverage": coverage,
         "coverage_gain": 0.0,
@@ -258,7 +254,6 @@ def run_evaluation(
     config_fuel_budget = float(config_params.get("fuel_budget", env.fuel_budget))
     config_num_orbits = float(config_params.get("num_orbits", 2.0))
     config_koz_radius = float(config_params.get("koz_radius", 0.95))
-    config_object_scale = float(config_params.get("object_scale", getattr(env, "object_scale", 0.8)))
 
     for loop_id in range(num_loops):
         # The reader advances to the next model during reset, so set to model_num - 1
@@ -287,7 +282,6 @@ def run_evaluation(
                     config_num_orbits=config_num_orbits,
                     config_max_step=max_steps,
                     config_koz_radius=config_koz_radius,
-                    config_object_scale=config_object_scale,
                 )
             )
 
@@ -352,7 +346,6 @@ def run_evaluation(
                         "config_num_orbits": config_num_orbits,
                         "config_max_step": max_steps,
                         "config_koz_radius": config_koz_radius,
-                        "config_object_scale": config_object_scale,
                         "step": step,
                         "coverage": current_coverage,
                         "coverage_gain": current_coverage - previous_coverage,
@@ -423,13 +416,12 @@ def model_file_exists(model_path: str) -> bool:
 
 # Default Curated Operational Matrix for Generalizability Evaluation
 DEFAULT_PARAMETER_MATRIX = [
-    # In-Distribution Baseline (Trained Regime: Scale 0.80)
+    # In-Distribution Baseline (Trained Regime)
     {
         "fuel_budget": 100.0,
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "object_scale": 0.80,
         "label": "InDist_100m_2orb",
     },
     # Extended Operational Envelope (Out-of-Distribution)
@@ -438,7 +430,6 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "object_scale": 0.80,
         "label": "OOD_200m_2orb",
     },
     {
@@ -446,7 +437,6 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 3.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "object_scale": 0.80,
         "label": "OOD_300m_3orb",
     },
     {
@@ -454,7 +444,6 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 5.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "object_scale": 0.80,
         "label": "OOD_500m_5orb",
     },
     {
@@ -462,7 +451,6 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 5.0,
         "max_step": 50,
         "koz_radius": 0.95,
-        "object_scale": 0.80,
         "label": "OOD_500m_5orb_Step50",
     },
     # Safety Standoff Sensitivity Matrix
@@ -471,7 +459,6 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.85,
-        "object_scale": 0.80,
         "label": "KOZ_0.85_Tight",
     },
     {
@@ -479,25 +466,7 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 1.05,
-        "object_scale": 0.80,
         "label": "KOZ_1.05_Wide",
-    },
-    # Object Scale Generalizability Matrix (Base Scale = 0.80, +/- 0.05)
-    {
-        "fuel_budget": 100.0,
-        "num_orbits": 2.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "object_scale": 0.75,
-        "label": "ObjectScale_0.75_Small",
-    },
-    {
-        "fuel_budget": 100.0,
-        "num_orbits": 2.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "object_scale": 0.85,
-        "label": "ObjectScale_0.85_Large",
     },
 ]
 
@@ -568,21 +537,13 @@ def main() -> None:
         help="List of KOZ standoff radii to evaluate (e.g. 0.85 0.95 1.05).",
     )
     parser.add_argument(
-        "--object_scales",
-        nargs="+",
-        type=float,
-        default=None,
-        help="List of object normalization scales to evaluate (e.g. 0.75 0.80 0.85).",
-    )
-    parser.add_argument(
         "--combos",
         nargs="+",
         type=str,
         default=None,
         help=(
-            "Explicit parameter tuples in format 'fuel,orbits,koz', "
-            "'fuel,orbits,koz,scale' or 'fuel,orbits,steps,koz,scale' "
-            "(e.g. --combos 100,2,0.95,0.75 100,2,0.95,0.85)."
+            "Explicit parameter tuples in format 'fuel,orbits,koz' or "
+            "'fuel,orbits,steps,koz' (e.g. --combos 100,3,0.85 300,2,1.05)."
         ),
     )
     parser.add_argument(
@@ -624,17 +585,12 @@ def main() -> None:
             if len(parts) == 3:
                 f_b, n_o, k_r = parts
                 m_s = 30
-                o_s = 0.80
             elif len(parts) == 4:
-                f_b, n_o, k_r, o_s = parts
-                m_s = 30
-            elif len(parts) == 5:
-                f_b, n_o, m_s, k_r, o_s = parts
+                f_b, n_o, m_s, k_r = parts
                 m_s = int(m_s)
             else:
                 raise ValueError(
-                    f"Invalid combo format '{combo_str}'. Expected 'fuel,orbits,koz', "
-                    "'fuel,orbits,koz,scale' or 'fuel,orbits,steps,koz,scale'."
+                    f"Invalid combo format '{combo_str}'. Expected 'fuel,orbits,koz' or 'fuel,orbits,steps,koz'."
                 )
             matrix_configs.append(
                 {
@@ -642,8 +598,7 @@ def main() -> None:
                     "num_orbits": n_o,
                     "max_step": m_s,
                     "koz_radius": k_r,
-                    "object_scale": o_s,
-                    "label": f"Combo_{int(f_b)}m_{int(n_o)}orb_koz{k_r}_scale{o_s:.2f}",
+                    "label": f"Combo_{int(f_b)}m_{int(n_o)}orb_koz{k_r}",
                 }
             )
     elif (
@@ -651,18 +606,16 @@ def main() -> None:
         or args.num_orbits is not None
         or args.max_steps is not None
         or args.koz_radii is not None
-        or args.object_scales is not None
     ):
         fuel_list = args.fuel_budgets or [100.0]
         orbit_list = args.num_orbits or [2.0]
         step_list = args.max_steps or [30]
         koz_list = args.koz_radii or [0.95]
-        scale_list = args.object_scales or [0.80]
 
         if args.grid_search:
             matrix_configs = []
-            for f_b, n_o, m_s, k_r, o_s in itertools.product(
-                fuel_list, orbit_list, step_list, koz_list, scale_list
+            for f_b, n_o, m_s, k_r in itertools.product(
+                fuel_list, orbit_list, step_list, koz_list
             ):
                 matrix_configs.append(
                     {
@@ -670,8 +623,7 @@ def main() -> None:
                         "num_orbits": n_o,
                         "max_step": m_s,
                         "koz_radius": k_r,
-                        "object_scale": o_s,
-                        "label": f"Matrix_{int(f_b)}m_{int(n_o)}orb_step{m_s}_koz{k_r}_scale{o_s:.2f}",
+                        "label": f"Matrix_{int(f_b)}m_{int(n_o)}orb_step{m_s}_koz{k_r}",
                     }
                 )
         else:
@@ -681,22 +633,19 @@ def main() -> None:
                 len(orbit_list),
                 len(step_list),
                 len(koz_list),
-                len(scale_list),
             )
             for i in range(max_len):
                 f_b = fuel_list[i % len(fuel_list)]
                 n_o = orbit_list[i % len(orbit_list)]
                 m_s = step_list[i % len(step_list)]
                 k_r = koz_list[i % len(koz_list)]
-                o_s = scale_list[i % len(scale_list)]
                 matrix_configs.append(
                     {
                         "fuel_budget": f_b,
                         "num_orbits": n_o,
                         "max_step": m_s,
                         "koz_radius": k_r,
-                        "object_scale": o_s,
-                        "label": f"Config_{i+1}_{int(f_b)}m_{int(n_o)}orb_scale{o_s:.2f}",
+                        "label": f"Config_{i+1}_{int(f_b)}m_{int(n_o)}orb",
                     }
                 )
     else:
@@ -719,7 +668,6 @@ def main() -> None:
         n_orbits = cfg_params["num_orbits"]
         m_step = cfg_params["max_step"]
         k_radius = cfg_params["koz_radius"]
-        o_scale = cfg_params.get("object_scale", 0.80)
         cfg_label = cfg_params["label"]
 
         print(
@@ -729,7 +677,7 @@ def main() -> None:
             f"=== MATRIX CONFIG [{cfg_idx}/{len(matrix_configs)}]: {cfg_label} ==="
         )
         print(
-            f"=== Fuel: {f_budget} m/s | Orbits: {n_orbits} | Steps: {m_step} | KOZ: {k_radius} | Scale: {o_scale} ==="
+            f"=== Fuel: {f_budget} m/s | Orbits: {n_orbits} | Steps: {m_step} | KOZ: {k_radius} ==="
         )
         print(
             f"=========================================================================="
@@ -757,7 +705,6 @@ def main() -> None:
                         num_orbits=n_orbits,
                         max_step=m_step,
                         koz_radius=k_radius,
-                        object_scale=o_scale,
                     )
                     model_num = int(env.shapenet_reader.model_num)
 
