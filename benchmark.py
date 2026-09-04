@@ -183,6 +183,7 @@ def initial_record(
     config_num_orbits: float,
     config_max_step: int,
     config_koz_radius: float,
+    model_checkpoint: str = "N/A",
 ) -> dict:
     total_time = get_total_time(env)
     mission_time = scalar(info.get("mission_time"), 0.0)
@@ -202,6 +203,7 @@ def initial_record(
     return {
         "dataset_split": split_name,
         "policy": policy_name,
+        "model_checkpoint": model_checkpoint,
         "model_name": model_name,
         "loop_id": loop_id,
         "config_fuel_budget": config_fuel_budget,
@@ -243,6 +245,7 @@ def run_evaluation(
     policy_name: str,
     config_params: dict,
     num_loops: int = 1,
+    model_checkpoint: str = "N/A",
 ) -> list[dict]:
     records = []
     model_num = int(env.shapenet_reader.model_num)
@@ -282,6 +285,7 @@ def run_evaluation(
                     config_num_orbits=config_num_orbits,
                     config_max_step=max_steps,
                     config_koz_radius=config_koz_radius,
+                    model_checkpoint=model_checkpoint,
                 )
             )
 
@@ -340,6 +344,7 @@ def run_evaluation(
                     {
                         "dataset_split": split_name,
                         "policy": policy_name,
+                        "model_checkpoint": model_checkpoint,
                         "model_name": model_name,
                         "loop_id": loop_id,
                         "config_fuel_budget": config_fuel_budget,
@@ -416,13 +421,21 @@ def model_file_exists(model_path: str) -> bool:
 
 # Default Curated Operational Matrix for Generalizability Evaluation
 DEFAULT_PARAMETER_MATRIX = [
-    # In-Distribution Baseline (Trained Regime)
+    # In-Distribution Baseline (Trained Regime - 10 steps)
+    {
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
+        "max_step": 10,
+        "koz_radius": 0.95,
+        "label": "InDist_100m_2orb_Step10",
+    },
+    # In-Distribution Horizon (Trained Regime - 30 steps)
     {
         "fuel_budget": 100.0,
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "label": "InDist_100m_2orb",
+        "label": "InDist_100m_2orb_Step30",
     },
     # Extended Operational Envelope (Out-of-Distribution)
     {
@@ -430,21 +443,21 @@ DEFAULT_PARAMETER_MATRIX = [
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "label": "OOD_200m_2orb",
+        "label": "OOD_200m_2orb_Step30",
     },
     {
         "fuel_budget": 300.0,
         "num_orbits": 3.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "label": "OOD_300m_3orb",
+        "label": "OOD_300m_3orb_Step30",
     },
     {
         "fuel_budget": 500.0,
         "num_orbits": 5.0,
         "max_step": 30,
         "koz_radius": 0.95,
-        "label": "OOD_500m_5orb",
+        "label": "OOD_500m_5orb_Step30",
     },
     {
         "fuel_budget": 500.0,
@@ -455,20 +468,69 @@ DEFAULT_PARAMETER_MATRIX = [
     },
     # Safety Standoff Sensitivity Matrix
     {
-        "fuel_budget": 100.0,
-        "num_orbits": 2.0,
+        "fuel_budget": 500.0,
+        "num_orbits": 5.0,
         "max_step": 30,
         "koz_radius": 0.85,
         "label": "KOZ_0.85_Tight",
     },
     {
-        "fuel_budget": 100.0,
-        "num_orbits": 2.0,
+        "fuel_budget": 500.0,
+        "num_orbits": 5.0,
         "max_step": 30,
         "koz_radius": 1.05,
         "label": "KOZ_1.05_Wide",
     },
 ]
+
+
+def print_summary_table(df: pd.DataFrame) -> None:
+    """Print a clean ASCII summary table of final coverage across configs and policies."""
+    print("\n" + "=" * 90)
+    print(f"{'BENCHMARK EVALUATION SUMMARY':^90}")
+    print("=" * 90)
+    print(
+        f"{'Config Label':<26} | {'Split':<6} | {'Policy':<8} | {'Final Cov (%)':<14} | {'Mean dV (m/s)':<14} | {'Avg Steps':<10}"
+    )
+    print("-" * 90)
+
+    # Calculate final step metrics per episode
+    episode_keys = [
+        "dataset_split",
+        "policy",
+        "model_checkpoint",
+        "model_name",
+        "loop_id",
+        "config_fuel_budget",
+        "config_num_orbits",
+        "config_max_step",
+        "config_koz_radius",
+    ]
+    final_steps = df.sort_values("step").groupby(episode_keys, as_index=False).last()
+
+    group_cols = [
+        "config_fuel_budget",
+        "config_num_orbits",
+        "config_max_step",
+        "config_koz_radius",
+        "dataset_split",
+        "policy",
+    ]
+    summary = final_steps.groupby(group_cols, as_index=False).agg({
+        "coverage": "mean",
+        "cumulative_dv": "mean",
+        "step": "mean",
+    })
+
+    for _, row in summary.iterrows():
+        cfg_name = f"{int(row['config_fuel_budget'])}m_{int(row['config_num_orbits'])}orb_s{int(row['config_max_step'])}_k{row['config_koz_radius']:.2f}"
+        cov_pct = row["coverage"] * 100.0
+        dv_val = row["cumulative_dv"]
+        steps_val = row["step"]
+        print(
+            f"{cfg_name:<26} | {row['dataset_split']:<6} | {row['policy']:<8} | {cov_pct:>12.2f}% | {dv_val:>12.2f} | {steps_val:>9.1f}"
+        )
+    print("=" * 90 + "\n")
 
 
 def main() -> None:
@@ -487,10 +549,13 @@ def main() -> None:
     parser.add_argument(
         "--model_path",
         "--model-path",
-        dest="model_path",
+        "--model_paths",
+        "--model-paths",
+        dest="model_paths",
+        nargs="+",
         type=str,
         required=True,
-        help="Path to trained PPO checkpoint.",
+        help="Path(s) to trained PPO checkpoint(s).",
     )
     parser.add_argument(
         "--output_dir",
@@ -527,7 +592,7 @@ def main() -> None:
         nargs="+",
         type=int,
         default=None,
-        help="List of max episode step bounds to evaluate (e.g. 30 50).",
+        help="List of max episode step bounds to evaluate (e.g. 10 30 50).",
     )
     parser.add_argument(
         "--koz_radii",
@@ -543,7 +608,7 @@ def main() -> None:
         default=None,
         help=(
             "Explicit parameter tuples in format 'fuel,orbits,koz' or "
-            "'fuel,orbits,steps,koz' (e.g. --combos 100,3,0.85 300,2,1.05)."
+            "'fuel,orbits,steps,koz' (e.g. --combos 100,2,10,0.95 500,5,30,0.95)."
         ),
     )
     parser.add_argument(
@@ -560,10 +625,13 @@ def main() -> None:
     if not os.path.isfile(args.config):
         parser.error(f"Configuration file not found: {args.config}")
 
-    if not model_file_exists(args.model_path):
-        parser.error(
-            f"PPO model not found: {args.model_path} (also checked {args.model_path}.zip)"
-        )
+    valid_model_paths = []
+    for m_path in args.model_paths:
+        if not model_file_exists(m_path):
+            parser.error(
+                f"PPO model not found: {m_path} (also checked {m_path}.zip)"
+            )
+        valid_model_paths.append(m_path)
 
     with open(args.config, "r", encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file) or {}
@@ -598,7 +666,7 @@ def main() -> None:
                     "num_orbits": n_o,
                     "max_step": m_s,
                     "koz_radius": k_r,
-                    "label": f"Combo_{int(f_b)}m_{int(n_o)}orb_koz{k_r}",
+                    "label": f"Combo_{int(f_b)}m_{int(n_o)}orb_s{m_s}_koz{k_r}",
                 }
             )
     elif (
@@ -645,14 +713,15 @@ def main() -> None:
                         "num_orbits": n_o,
                         "max_step": m_s,
                         "koz_radius": k_r,
-                        "label": f"Config_{i+1}_{int(f_b)}m_{int(n_o)}orb",
+                        "label": f"Config_{i+1}_{int(f_b)}m_{int(n_o)}orb_s{m_s}",
                     }
                 )
     else:
         matrix_configs = DEFAULT_PARAMETER_MATRIX
 
     print(
-        f"\n🚀 System Generalizability Benchmark initialized with {len(matrix_configs)} matrix configurations:"
+        f"\n🚀 System Generalizability Benchmark initialized with {len(matrix_configs)} matrix configurations "
+        f"and {len(valid_model_paths)} model checkpoint(s):"
     )
     for idx, cfg in enumerate(matrix_configs, 1):
         print(
@@ -661,7 +730,6 @@ def main() -> None:
         )
 
     all_records = []
-    ppo_model = None
 
     for cfg_idx, cfg_params in enumerate(matrix_configs, 1):
         f_budget = cfg_params["fuel_budget"]
@@ -714,31 +782,38 @@ def main() -> None:
                         )
                         continue
 
-                    if ppo_model is None:
-                        print("Loading PPO model checkpoint...")
+                    # Evaluate each PPO model checkpoint on this configuration
+                    for m_idx, m_path in enumerate(valid_model_paths, 1):
+                        ckpt_stem = os.path.splitext(os.path.basename(m_path))[0]
+                        policy_tag = "PPO" if len(valid_model_paths) == 1 else f"PPO_{ckpt_stem}"
+
+                        print(
+                            f"Loading PPO checkpoint [{m_idx}/{len(valid_model_paths)}]: {m_path}..."
+                        )
                         custom_objects = {
                             "action_space": env.action_space,
                             "observation_space": env.observation_space,
                         }
                         ppo_model = PPO.load(
-                            args.model_path,
+                            m_path,
                             custom_objects=custom_objects,
                             device="auto",
                         )
 
-                    print(
-                        f"Running PPO on {split_name} ({model_num} models)..."
-                    )
-                    all_records.extend(
-                        run_evaluation(
-                            env=env,
-                            policy=ppo_model,
-                            split_name=split_name,
-                            policy_name="PPO",
-                            config_params=cfg_params,
-                            num_loops=args.loops,
+                        print(
+                            f"Running {policy_tag} ({ckpt_stem}) on {split_name} ({model_num} models)..."
                         )
-                    )
+                        all_records.extend(
+                            run_evaluation(
+                                env=env,
+                                policy=ppo_model,
+                                split_name=split_name,
+                                policy_name=policy_tag,
+                                config_params=cfg_params,
+                                num_loops=args.loops,
+                                model_checkpoint=ckpt_stem,
+                            )
+                        )
 
                     print(f"Running Random Policy on {split_name}...")
                     all_records.extend(
@@ -749,6 +824,7 @@ def main() -> None:
                             policy_name="Random",
                             config_params=cfg_params,
                             num_loops=args.loops,
+                            model_checkpoint="random_baseline",
                         )
                     )
 
@@ -762,6 +838,7 @@ def main() -> None:
                             policy_name="Spiral",
                             config_params=cfg_params,
                             num_loops=args.loops,
+                            model_checkpoint="spiral_baseline",
                         )
                     )
 
@@ -773,11 +850,18 @@ def main() -> None:
         raise RuntimeError("Benchmark produced no records.")
 
     dataframe = pd.DataFrame(all_records)
-    csv_path = os.path.join(args.output_dir, "benchmark_raw_data_matrix.csv")
-    dataframe.to_csv(csv_path, index=False)
+    csv_matrix_path = os.path.join(args.output_dir, "benchmark_raw_data_matrix.csv")
+    dataframe.to_csv(csv_matrix_path, index=False)
 
-    print(f"\n🎉 Benchmark complete! Raw matrix data saved to {csv_path}")
+    # Also save standard benchmark_raw_data.csv for backward compatibility
+    csv_standard_path = os.path.join(args.output_dir, "benchmark_raw_data.csv")
+    if len(matrix_configs) == 1:
+        dataframe.to_csv(csv_standard_path, index=False)
+
+    print(f"\n🎉 Benchmark complete! Raw matrix data saved to {csv_matrix_path}")
     print(f"Total Rows Written: {len(dataframe)}")
+
+    print_summary_table(dataframe)
 
 
 if __name__ == "__main__":
