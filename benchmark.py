@@ -1,11 +1,17 @@
 import argparse
 import inspect
 import itertools
+import json
+import logging
 import os
+import sys
+import time
 from typing import Any
+import zipfile
 
 import numpy as np
 import pandas as pd
+import torch
 import yaml
 from stable_baselines3 import PPO
 
@@ -13,6 +19,155 @@ from stable_baselines3 import PPO
 import models.pointnet2_cls_ssg  # noqa: F401
 import optim.adamw  # noqa: F401
 from envs.rl_nbv_env import PointCloudNextBestViewEnv
+
+
+def setup_logger(log_file: str = "./artefacts/benchmark/benchmark.log") -> logging.Logger:
+    """Configure comprehensive logger outputting to both console and log file."""
+    log_dir = os.path.dirname(os.path.abspath(log_file))
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception as e:
+        print(
+            f"Warning: Failed to create log directory {log_dir}: {e}. "
+            "Falling back to ./benchmark.log"
+        )
+        log_file = "./benchmark.log"
+
+    logger = logging.getLogger("benchmark")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Console Handler (INFO level)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # File Handler (DEBUG level)
+    try:
+        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+        # Attach file handler to root logger and environment loggers so all subsystem logs are preserved
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(file_handler)
+
+        train_logger = logging.getLogger("train")
+        train_logger.setLevel(logging.DEBUG)
+        train_logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"Warning: Could not attach file handler for {log_file}: {e}")
+
+    return logger
+
+
+def inspect_and_log_model(
+    model_path: str, ppo_model: Any, logger: logging.Logger
+) -> None:
+    """Log file metadata, training progress, and neural network diagnostics to verify model integrity."""
+    actual_path = model_path if os.path.isfile(model_path) else f"{model_path}.zip"
+    abs_path = os.path.abspath(actual_path)
+    file_size_mb = (
+        os.path.getsize(abs_path) / (1024 * 1024)
+        if os.path.exists(abs_path)
+        else 0.0
+    )
+    mtime = (
+        time.ctime(os.path.getmtime(abs_path))
+        if os.path.exists(abs_path)
+        else "Unknown"
+    )
+    stem = os.path.splitext(os.path.basename(model_path))[0]
+
+    logger.info("=" * 80)
+    logger.info(f"MODEL CHECKPOINT DIAGNOSTICS: {stem}")
+    logger.info(f"  Path: {abs_path}")
+    logger.info(f"  Size: {file_size_mb:.2f} MB")
+    logger.info(f"  Last Modified: {mtime}")
+
+    # Inspect internal SB3 archive metadata if available
+    if os.path.isfile(abs_path) and zipfile.is_zipfile(abs_path):
+        try:
+            with zipfile.ZipFile(abs_path, "r") as archive:
+                namelist = archive.namelist()
+                if "data" in namelist:
+                    data_bytes = archive.read("data")
+                    data = json.loads(data_bytes.decode("utf-8"))
+                    num_steps = data.get("num_timesteps")
+                    tot_steps = data.get("_total_timesteps")
+                    if num_steps is not None and tot_steps is not None:
+                        pct = (num_steps / tot_steps * 100.0) if tot_steps > 0 else 0.0
+                        logger.info(
+                            f"  Training Steps: {num_steps:,} / {tot_steps:,} ({pct:.1f}%)"
+                        )
+                        if num_steps < tot_steps * 0.5:
+                            logger.warning(
+                                f"  ⚠️  CHECKPOINT WARNING: Model only trained for {num_steps:,} "
+                                f"steps ({pct:.1f}% of target {tot_steps:,}). This is likely an incomplete run!"
+                            )
+                    gamma = data.get("gamma")
+                    n_steps = data.get("n_steps")
+                    batch_size = data.get("batch_size")
+                    logger.info(
+                        f"  Hyperparameters: gamma={gamma}, n_steps={n_steps}, batch_size={batch_size}"
+                    )
+
+                if "system_info.txt" in namelist:
+                    sys_info = archive.read("system_info.txt").decode("utf-8", errors="ignore").strip().splitlines()
+                    for line in sys_info:
+                        if any(k in line for k in ["PyTorch:", "GPU Enabled:", "OS:"]):
+                            logger.info(f"  Train System: {line.strip('- ')}")
+        except Exception as err:
+            logger.debug(f"  Could not read SB3 archive metadata: {err}")
+
+    if stem == "final":
+        logger.warning(
+            "⚠️  WARNING: Checkpoint name is 'final' (artefacts/train/final.zip). "
+            "An early training run that stalled at ~37% coverage was saved as 'final.zip'. "
+            "If this run underperforms, verify if 'final_500_5.zip' (which achieved >80% coverage) "
+            "was intended instead!"
+        )
+        alt_path = os.path.join(os.path.dirname(abs_path), "final_500_5.zip")
+        if os.path.exists(alt_path):
+            logger.warning(
+                f"  Found trained alternative checkpoint: {alt_path}"
+            )
+
+    try:
+        policy_net = ppo_model.policy
+        total_params = sum(p.numel() for p in policy_net.parameters())
+        trainable_params = sum(
+            p.numel() for p in policy_net.parameters() if p.requires_grad
+        )
+        logger.info(
+            f"  Total Parameters: {total_params:,} (Trainable: {trainable_params:,})"
+        )
+
+        if hasattr(policy_net, "action_net"):
+            action_w = policy_net.action_net.weight.data
+            action_b = (
+                policy_net.action_net.bias.data
+                if policy_net.action_net.bias is not None
+                else None
+            )
+            w_norm = float(torch.norm(action_w))
+            logger.info(f"  action_net weight L2-norm: {w_norm:.6f}")
+            if action_b is not None:
+                bias_vals = action_b.cpu().numpy().tolist()
+                logger.info(
+                    f"  action_net bias: [theta={bias_vals[0]:.4f}, phi={bias_vals[1]:.4f}, time={bias_vals[2]:.4f}]"
+                )
+    except Exception as exc:
+        logger.debug(f"  Could not extract detailed network parameters: {exc}")
+    logger.info("=" * 80)
 
 
 class SpiralPolicy:
@@ -61,6 +216,7 @@ def create_env(
     num_orbits: float,
     max_step: int,
     koz_radius: float = 0.95,
+    logger: logging.Logger | None = None,
 ) -> PointCloudNextBestViewEnv:
     """Create an environment with operational parameters explicitly configured via matrix."""
     env_config = config.get("environment", {})
@@ -98,6 +254,8 @@ def create_env(
         "state_reward_config": env_config.get("state_reward", {}),
         "scp_planner_config": scp_planner_cfg,
     }
+    if logger is not None:
+        env_kwargs["logger"] = logger
 
     # Filter out unsupported kwargs if the environment constructor signature changes
     signature = inspect.signature(PointCloudNextBestViewEnv.__init__)
@@ -110,9 +268,11 @@ def create_env(
     if not accepts_arbitrary_kwargs:
         unsupported = sorted(key for key in env_kwargs if key not in parameters)
         if unsupported:
-            print(
-                f"Warning: PointCloudNextBestViewEnv does not accept {unsupported}; omitting them."
-            )
+            msg = f"PointCloudNextBestViewEnv does not accept {unsupported}; omitting them."
+            if logger is not None:
+                logger.warning(msg)
+            else:
+                print(f"Warning: {msg}")
             env_kwargs = {
                 key: value
                 for key, value in env_kwargs.items()
@@ -246,6 +406,7 @@ def run_evaluation(
     config_params: dict,
     num_loops: int = 1,
     model_checkpoint: str = "N/A",
+    logger: logging.Logger | None = None,
 ) -> list[dict]:
     records = []
     model_num = int(env.shapenet_reader.model_num)
@@ -389,7 +550,19 @@ def run_evaluation(
                         ),
                         "is_terminated": terminated,
                         "is_truncated": truncated,
-                    }
+                        }
+                )
+
+            if logger is not None:
+                coll_str = (
+                    f" [COLLISION min_clr={info.get('collision_min_clearance', float('nan')):.4f}]"
+                    if info.get("collision_detected", False)
+                    else ""
+                )
+                logger.info(
+                    f"  [{policy_name:<8}] {split_name:<5} | Model: {model_name:<22} "
+                    f"| Final Cov: {current_coverage * 100.0:6.2f}% | dV: {cum_dv:6.2f} m/s "
+                    f"| Steps: {step:2d}/{max_steps}{coll_str}"
                 )
 
     return records
@@ -484,15 +657,17 @@ DEFAULT_PARAMETER_MATRIX = [
 ]
 
 
-def print_summary_table(df: pd.DataFrame) -> None:
-    """Print a clean ASCII summary table of final coverage across configs and policies."""
-    print("\n" + "=" * 90)
-    print(f"{'BENCHMARK EVALUATION SUMMARY':^90}")
-    print("=" * 90)
-    print(
-        f"{'Config Label':<26} | {'Split':<6} | {'Policy':<8} | {'Final Cov (%)':<14} | {'Mean dV (m/s)':<14} | {'Avg Steps':<10}"
-    )
-    print("-" * 90)
+def print_summary_table(
+    df: pd.DataFrame, logger: logging.Logger | None = None
+) -> None:
+    """Print and log a clean ASCII summary table of final coverage across configs and policies."""
+    lines = [
+        "\n" + "=" * 90,
+        f"{'BENCHMARK EVALUATION SUMMARY':^90}",
+        "=" * 90,
+        f"{'Config Label':<26} | {'Split':<6} | {'Policy':<8} | {'Final Cov (%)':<14} | {'Mean dV (m/s)':<14} | {'Avg Steps':<10}",
+        "-" * 90,
+    ]
 
     # Calculate final step metrics per episode
     episode_keys = [
@@ -527,10 +702,16 @@ def print_summary_table(df: pd.DataFrame) -> None:
         cov_pct = row["coverage"] * 100.0
         dv_val = row["cumulative_dv"]
         steps_val = row["step"]
-        print(
+        lines.append(
             f"{cfg_name:<26} | {row['dataset_split']:<6} | {row['policy']:<8} | {cov_pct:>12.2f}% | {dv_val:>12.2f} | {steps_val:>9.1f}"
         )
-    print("=" * 90 + "\n")
+    lines.append("=" * 90 + "\n")
+
+    for line in lines:
+        if logger is not None:
+            logger.info(line)
+        else:
+            print(line)
 
 
 def main() -> None:
@@ -564,6 +745,15 @@ def main() -> None:
         type=str,
         default="./artefacts/benchmark",
         help="Output directory for benchmark CSV files.",
+    )
+    parser.add_argument(
+        "--log_file",
+        "--log-file",
+        "--log_path",
+        dest="log_file",
+        type=str,
+        default="./artefacts/benchmark/benchmark.log",
+        help="Path to write comprehensive benchmark execution log file.",
     )
     parser.add_argument(
         "--loops",
@@ -619,15 +809,32 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    logger = setup_logger(args.log_file)
+    logger.info("==========================================================================")
+    logger.info("          AUTONOMOUS SATELLITE INSPECTION (RL-NBV) BENCHMARK             ")
+    logger.info("==========================================================================")
+    logger.info(f"Log File: {os.path.abspath(args.log_file)}")
+    logger.info(f"PyTorch: {torch.__version__} | CUDA Available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logger.info(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+    logger.info(f"Config File: {os.path.abspath(args.config)}")
+    logger.info(f"Output Directory: {os.path.abspath(args.output_dir)}")
+    logger.info(f"Model Path(s): {args.model_paths}")
+
     if args.loops < 1:
+        logger.error("--loops must be at least 1.")
         parser.error("--loops must be at least 1.")
 
     if not os.path.isfile(args.config):
+        logger.error(f"Configuration file not found: {args.config}")
         parser.error(f"Configuration file not found: {args.config}")
 
     valid_model_paths = []
     for m_path in args.model_paths:
         if not model_file_exists(m_path):
+            logger.error(
+                f"PPO model not found: {m_path} (also checked {m_path}.zip)"
+            )
             parser.error(
                 f"PPO model not found: {m_path} (also checked {m_path}.zip)"
             )
@@ -719,12 +926,12 @@ def main() -> None:
     else:
         matrix_configs = DEFAULT_PARAMETER_MATRIX
 
-    print(
+    logger.info(
         f"\n🚀 System Generalizability Benchmark initialized with {len(matrix_configs)} matrix configurations "
         f"and {len(valid_model_paths)} model checkpoint(s):"
     )
     for idx, cfg in enumerate(matrix_configs, 1):
-        print(
+        logger.info(
             f"   [{idx}] {cfg['label']}: Fuel={cfg['fuel_budget']} m/s, "
             f"Orbits={cfg['num_orbits']}, MaxSteps={cfg['max_step']}, KOZ={cfg['koz_radius']}"
         )
@@ -738,31 +945,31 @@ def main() -> None:
         k_radius = cfg_params["koz_radius"]
         cfg_label = cfg_params["label"]
 
-        print(
-            f"\n=========================================================================="
+        logger.info(
+            "\n=========================================================================="
         )
-        print(
+        logger.info(
             f"=== MATRIX CONFIG [{cfg_idx}/{len(matrix_configs)}]: {cfg_label} ==="
         )
-        print(
+        logger.info(
             f"=== Fuel: {f_budget} m/s | Orbits: {n_orbits} | Steps: {m_step} | KOZ: {k_radius} ==="
         )
-        print(
-            f"=========================================================================="
+        logger.info(
+            "=========================================================================="
         )
 
         for split_name, base_path in splits.items():
-            print(f"\n--- Evaluating Split: {split_name} ---")
+            logger.info(f"\n--- Evaluating Split: {split_name} ---")
 
             data_paths = get_data_paths(base_path)
             if not data_paths:
-                print(
-                    f"Warning: Data path {base_path} does not exist. Skipping."
+                logger.warning(
+                    f"Data path {base_path} does not exist. Skipping."
                 )
                 continue
 
             for data_path in data_paths:
-                print(f"-> Processing partition: {data_path}")
+                logger.info(f"-> Processing partition: {data_path}")
                 env = None
 
                 try:
@@ -773,12 +980,13 @@ def main() -> None:
                         num_orbits=n_orbits,
                         max_step=m_step,
                         koz_radius=k_radius,
+                        logger=logger,
                     )
                     model_num = int(env.shapenet_reader.model_num)
 
                     if model_num <= 0:
-                        print(
-                            f"Warning: No models found in {data_path}. Skipping."
+                        logger.warning(
+                            f"No models found in {data_path}. Skipping."
                         )
                         continue
 
@@ -787,7 +995,7 @@ def main() -> None:
                         ckpt_stem = os.path.splitext(os.path.basename(m_path))[0]
                         policy_tag = "PPO" if len(valid_model_paths) == 1 else f"PPO_{ckpt_stem}"
 
-                        print(
+                        logger.info(
                             f"Loading PPO checkpoint [{m_idx}/{len(valid_model_paths)}]: {m_path}..."
                         )
                         custom_objects = {
@@ -800,7 +1008,11 @@ def main() -> None:
                             device="auto",
                         )
 
-                        print(
+                        # Inspect model diagnostics on first load
+                        if cfg_idx == 1 and split_name == list(splits.keys())[0] and data_path == data_paths[0]:
+                            inspect_and_log_model(m_path, ppo_model, logger)
+
+                        logger.info(
                             f"Running {policy_tag} ({ckpt_stem}) on {split_name} ({model_num} models)..."
                         )
                         all_records.extend(
@@ -812,10 +1024,11 @@ def main() -> None:
                                 config_params=cfg_params,
                                 num_loops=args.loops,
                                 model_checkpoint=ckpt_stem,
+                                logger=logger,
                             )
                         )
 
-                    print(f"Running Random Policy on {split_name}...")
+                    logger.info(f"Running Random Policy on {split_name}...")
                     all_records.extend(
                         run_evaluation(
                             env=env,
@@ -825,10 +1038,11 @@ def main() -> None:
                             config_params=cfg_params,
                             num_loops=args.loops,
                             model_checkpoint="random_baseline",
+                            logger=logger,
                         )
                     )
 
-                    print(f"Running Spiral Baseline Policy on {split_name}...")
+                    logger.info(f"Running Spiral Baseline Policy on {split_name}...")
                     spiral_policy = SpiralPolicy(steps_per_episode=m_step)
                     all_records.extend(
                         run_evaluation(
@@ -839,6 +1053,7 @@ def main() -> None:
                             config_params=cfg_params,
                             num_loops=args.loops,
                             model_checkpoint="spiral_baseline",
+                            logger=logger,
                         )
                     )
 
@@ -858,10 +1073,10 @@ def main() -> None:
     if len(matrix_configs) == 1:
         dataframe.to_csv(csv_standard_path, index=False)
 
-    print(f"\n🎉 Benchmark complete! Raw matrix data saved to {csv_matrix_path}")
-    print(f"Total Rows Written: {len(dataframe)}")
+    logger.info(f"\n🎉 Benchmark complete! Raw matrix data saved to {csv_matrix_path}")
+    logger.info(f"Total Rows Written: {len(dataframe)}")
 
-    print_summary_table(dataframe)
+    print_summary_table(dataframe, logger=logger)
 
 
 if __name__ == "__main__":
