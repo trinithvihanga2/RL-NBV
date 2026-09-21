@@ -19,6 +19,14 @@ from stable_baselines3 import PPO
 import models.pointnet2_cls_ssg  # noqa: F401
 import optim.adamw  # noqa: F401
 from envs.rl_nbv_env import PointCloudNextBestViewEnv
+try:
+    from baselines.classical_nbv import (
+        VolumetricGreedyNBVPolicy,
+        CostAwareGreedyNBVPolicy,
+    )
+except ImportError:
+    VolumetricGreedyNBVPolicy = None
+    CostAwareGreedyNBVPolicy = None
 
 
 def setup_logger(log_file: str = "./artefacts/benchmark/benchmark.log") -> logging.Logger:
@@ -733,10 +741,10 @@ def main() -> None:
         "--model_paths",
         "--model-paths",
         dest="model_paths",
-        nargs="+",
+        nargs="*",
         type=str,
-        required=True,
-        help="Path(s) to trained PPO checkpoint(s).",
+        default=None,
+        help="Path(s) to trained PPO checkpoint(s). Defaults to artefacts/train/final.zip or final.zip if omitted.",
     )
     parser.add_argument(
         "--output_dir",
@@ -806,6 +814,21 @@ def main() -> None:
         action="store_true",
         help="If set, evaluates the full Cartesian product grid of CLI parameter lists.",
     )
+    parser.add_argument(
+        "--include_classical_baselines",
+        "--eval_classical",
+        dest="include_classical_baselines",
+        action="store_true",
+        default=True,
+        help="Evaluate Volumetric Greedy NBV (G-NBV) and Cost-Aware Greedy NBV (CA-NBV) baselines (default: True).",
+    )
+    parser.add_argument(
+        "--skip_classical_baselines",
+        "--no_classical_baselines",
+        dest="include_classical_baselines",
+        action="store_false",
+        help="Disable evaluation of classical NBV baselines.",
+    )
 
     args = parser.parse_args()
 
@@ -828,6 +851,24 @@ def main() -> None:
     if not os.path.isfile(args.config):
         logger.error(f"Configuration file not found: {args.config}")
         parser.error(f"Configuration file not found: {args.config}")
+
+    if not args.model_paths:
+        # Auto-detect final.zip in standard locations
+        candidates = [
+            "./artefacts/train/final.zip",
+            "./artefacts/train/final",
+            "./final.zip",
+            "./final",
+        ]
+        found = None
+        for cand in candidates:
+            if model_file_exists(cand):
+                found = cand
+                break
+        if found is not None:
+            args.model_paths = [found]
+        else:
+            args.model_paths = ["./artefacts/train/final.zip"]
 
     valid_model_paths = []
     for m_path in args.model_paths:
@@ -1056,6 +1097,52 @@ def main() -> None:
                             logger=logger,
                         )
                     )
+
+                    if args.include_classical_baselines:
+                        if VolumetricGreedyNBVPolicy is None or CostAwareGreedyNBVPolicy is None:
+                            logger.warning(
+                                "Classical NBV baselines requested, but could not import from baselines.classical_nbv. Skipping."
+                            )
+                        else:
+                            logger.info(f"Running Volumetric Greedy NBV Policy (G-NBV) on {split_name}...")
+                            g_nbv_policy = VolumetricGreedyNBVPolicy(
+                                env=env,
+                                num_candidates=64,
+                                orbit_radius=float(env.orbit_config.orbit_radius),
+                            )
+                            all_records.extend(
+                                run_evaluation(
+                                    env=env,
+                                    policy=g_nbv_policy,
+                                    split_name=split_name,
+                                    policy_name="G-NBV",
+                                    config_params=cfg_params,
+                                    num_loops=args.loops,
+                                    model_checkpoint="gnbv_baseline",
+                                    logger=logger,
+                                )
+                            )
+
+                            logger.info(f"Running Cost-Aware Greedy NBV Policy (CA-NBV) on {split_name}...")
+                            ca_nbv_policy = CostAwareGreedyNBVPolicy(
+                                env=env,
+                                num_candidates=32,
+                                orbit_radius=float(env.orbit_config.orbit_radius),
+                                fuel_budget=f_budget,
+                                total_time=get_total_time(env),
+                            )
+                            all_records.extend(
+                                run_evaluation(
+                                    env=env,
+                                    policy=ca_nbv_policy,
+                                    split_name=split_name,
+                                    policy_name="CA-NBV",
+                                    config_params=cfg_params,
+                                    num_loops=args.loops,
+                                    model_checkpoint="canbv_baseline",
+                                    logger=logger,
+                                )
+                            )
 
                 finally:
                     if env is not None and hasattr(env, "close"):
