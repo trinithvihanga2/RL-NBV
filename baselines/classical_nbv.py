@@ -83,8 +83,8 @@ class VolumetricGreedyNBVPolicy:
         cam_pos = obs["camera_position"]
         current_time = getattr(self.env, "current_time", 0.0)
         
-        # Candidate duration (nominal quick transfer)
-        tau = 0.5
+        # Candidate duration (nominal feasible multi-node transfer)
+        tau = 1.5
         predicted_time = current_time + tau
         sun_dir = self._predict_sun_direction(predicted_time)
         
@@ -108,7 +108,8 @@ class VolumetricGreedyNBVPolicy:
                 break
                 
         self.step_idx += 1
-        action = cartesian_to_action(selected_view, self.orbit_radius, duration_norm=-1.0)
+        time_norm = float((tau / (getattr(self.env, "total_time", 14.89) / 2.0)) - 1.0)
+        action = cartesian_to_action(selected_view, self.orbit_radius, duration_norm=time_norm)
         return action, None
 
     def _predict_sun_direction(self, t: float) -> np.ndarray:
@@ -117,24 +118,26 @@ class VolumetricGreedyNBVPolicy:
         return np.array([np.cos(theta), np.sin(theta), 0.0], dtype=np.float32)
 
     def _compute_rear_side_gain(self, pcd: np.ndarray, view_pos: np.ndarray, sun_dir: np.ndarray) -> float:
-        """Estimate rear-side voxel information score from current point cloud."""
+        """Estimate unobserved information gain for candidate view_pos under sun_dir."""
         if len(pcd) == 0:
             return 1.0
-        # Line of sight from view_pos to target centroid (0,0,0)
-        view_dir = -view_pos / np.linalg.norm(view_pos)
-        
-        # Check points illuminated by Sun
-        dots_sun = np.sum(pcd * sun_dir, axis=1)
-        lit_pcd = pcd[dots_sun > 0]
-        if len(lit_pcd) == 0:
-            return 0.1
-            
-        # Points facing the candidate camera
-        dots_view = np.sum((view_pos - lit_pcd) * view_dir, axis=1)
-        facing_pts = np.sum(dots_view > 0)
-        
-        # Unobserved rear-side proxy: favor regions where previous observations are sparse
-        return float(facing_pts) / float(len(pcd) + 1e-6)
+        v_norm = view_pos / np.linalg.norm(view_pos)
+        sun_dot = float(np.dot(v_norm, sun_dir))
+        # Sun illumination weighting: positions on sunlit hemisphere have higher prospective gain
+        sun_factor = max(0.05, (sun_dot + 1.0) / 2.0)
+
+        # Redundancy penalty: fraction of existing reconstruction cloud observed in this viewing cone
+        boresight = -v_norm
+        d = pcd - view_pos
+        d_norms = np.linalg.norm(d, axis=1, keepdims=True)
+        d_unit = d / np.maximum(d_norms, 1e-8)
+        cos_alpha = np.sum(d_unit * boresight, axis=1)
+
+        in_fov = np.sum(cos_alpha > 0.8)
+        redundancy = float(in_fov) / float(len(pcd) + 1e-6)
+        novelty = 1.0 - redundancy
+
+        return float(sun_factor * (0.2 + 0.8 * novelty))
 
 
 class CostAwareGreedyNBVPolicy:
@@ -170,13 +173,13 @@ class CostAwareGreedyNBVPolicy:
         cam_pos = obs["camera_position"]
         current_time = getattr(self.env, "current_time", 0.0)
         
-        # Duration candidate grid
-        tau_candidates = [0.5, 1.0, 2.0]
+        # Duration candidate grid (feasible multi-node transfers N >= 2)
+        tau_candidates = [0.8, 1.2, 1.6, 2.0]
         r0 = cam_pos * self.env.orbit_config.unit_scale
         
         best_utility = -float("inf")
         best_view = self.candidate_views[0]
-        best_tau = 0.5
+        best_tau = 1.2
         
         for cand_pos in self.candidate_views:
             rf = cand_pos * self.env.orbit_config.unit_scale
@@ -216,13 +219,23 @@ class CostAwareGreedyNBVPolicy:
         return np.array([np.cos(theta), np.sin(theta), 0.0], dtype=np.float32)
 
     def _compute_rear_side_gain(self, pcd: np.ndarray, view_pos: np.ndarray, sun_dir: np.ndarray) -> float:
+        """Estimate unobserved information gain for candidate view_pos under sun_dir."""
         if len(pcd) == 0:
             return 1.0
-        view_dir = -view_pos / np.linalg.norm(view_pos)
-        dots_sun = np.sum(pcd * sun_dir, axis=1)
-        lit_pcd = pcd[dots_sun > 0]
-        if len(lit_pcd) == 0:
-            return 0.1
-        dots_view = np.sum((view_pos - lit_pcd) * view_dir, axis=1)
-        facing_pts = np.sum(dots_view > 0)
-        return float(facing_pts) / float(len(pcd) + 1e-6)
+        v_norm = view_pos / np.linalg.norm(view_pos)
+        sun_dot = float(np.dot(v_norm, sun_dir))
+        # Sun illumination weighting
+        sun_factor = max(0.05, (sun_dot + 1.0) / 2.0)
+
+        # Redundancy penalty
+        boresight = -v_norm
+        d = pcd - view_pos
+        d_norms = np.linalg.norm(d, axis=1, keepdims=True)
+        d_unit = d / np.maximum(d_norms, 1e-8)
+        cos_alpha = np.sum(d_unit * boresight, axis=1)
+
+        in_fov = np.sum(cos_alpha > 0.8)
+        redundancy = float(in_fov) / float(len(pcd) + 1e-6)
+        novelty = 1.0 - redundancy
+
+        return float(sun_factor * (0.2 + 0.8 * novelty))
