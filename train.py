@@ -98,9 +98,10 @@ def config_to_args(config):
         "test_data_path": ds.get("test_data_path"),
         # Environment
         "observation_space_dim": env.get("observation_space_dim", 1024),
-        "is_normalize": env.get("is_normalize", 1),
         "terminated_coverage": env.get("terminated_coverage", 0.97),
         "max_step": env.get("max_step", 11),
+        "collision_penalty_weight": env.get("collision_penalty_weight", 25.0),
+        "collision_check_samples": env.get("collision_check_samples", 32),
         "is_ratio_reward": env.get("is_ratio_reward", train.get("is_ratio_reward", 1)),
         "is_reward_with_cur_coverage": env.get("is_reward_with_cur_coverage", 0),
         "cur_coverage_ratio": env.get("cur_coverage_ratio", 1.0),
@@ -207,6 +208,11 @@ def caculate_average_coverage(env, model, step_size, output_file, logger):
             obs, rewards, terminated, truncated, info = env.step(action)
             coverages[step_id + 1] = info["current_coverage"]
             average_coverage[step_id + 1] += coverages[step_id + 1]
+            if terminated or truncated:
+                for rem_step in range(step_id + 2, step_size):
+                    coverages[rem_step] = info["current_coverage"]
+                    average_coverage[rem_step] += info["current_coverage"]
+                break
 
         reached_indices = np.where(coverages >= target_coverage)[0]
         if reached_indices.size > 0:
@@ -335,7 +341,8 @@ def make_env(data_path, env_id, logger_name, log_file, args):
             worker_logger,
             data_path=data_path,
             observation_space_dim=args.observation_space_dim,
-            is_normalize=(args.is_normalize == 1),
+            collision_penalty_weight=args.collision_penalty_weight,
+            collision_check_samples=args.collision_check_samples,
             terminated_coverage=args.terminated_coverage,
             max_step=args.max_step,
             env_id=env_id,
@@ -587,7 +594,8 @@ if __name__ == "__main__":
             logger.getChild("train_env"),
             data_path=args.train_data_path,
             observation_space_dim=args.observation_space_dim,
-            is_normalize=(args.is_normalize == 1),
+            collision_penalty_weight=args.collision_penalty_weight,
+            collision_check_samples=args.collision_check_samples,
             terminated_coverage=args.terminated_coverage,
             max_step=args.max_step,
             logger=logger.getChild("train_env"),
@@ -607,7 +615,8 @@ if __name__ == "__main__":
         logger.getChild("verify_env"),
         data_path=args.verify_data_path,
         observation_space_dim=args.observation_space_dim,
-        is_normalize=(args.is_normalize == 1),
+        collision_penalty_weight=args.collision_penalty_weight,
+        collision_check_samples=args.collision_check_samples,
         terminated_coverage=args.terminated_coverage,
         max_step=args.max_step,
         logger=logger.getChild("verify_env"),
@@ -626,7 +635,8 @@ if __name__ == "__main__":
         logger.getChild("test_env"),
         data_path=args.test_data_path,
         observation_space_dim=args.observation_space_dim,
-        is_normalize=(args.is_normalize == 1),
+        collision_penalty_weight=args.collision_penalty_weight,
+        collision_check_samples=args.collision_check_samples,
         terminated_coverage=args.terminated_coverage,
         max_step=args.max_step,
         logger=logger.getChild("test_env"),
@@ -704,6 +714,7 @@ if __name__ == "__main__":
         verify_env,
         test_env,
         check_freq=coverage_log_freq,
+        step_size=args.max_step,
         best_model_path=os.path.join(args.checkpoint_path, "best_model_coverage"),
         save_freq=args.save_freq,
         save_path=args.checkpoint_path,

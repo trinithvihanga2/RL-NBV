@@ -19,7 +19,7 @@ environment:
   cur_coverage_ratio: 1.0
   time_cost_weight: 1.0
   delta_v_weight: 1.0
-  fuel_budget: 100.0
+  fuel_budget: 76504.0 # 100 m/s translated to m/TU (100 * 765.04)
   target_orbit:
     orbit_radius: 1.12
     grav_param: 1.0
@@ -42,7 +42,7 @@ environment:
   sun_position:
     initial_direction: [1.0, 0.0, 0.0]
     orbital_params:
-      angular_velocity_rad_per_s: 0.1
+      angular_velocity_rad_per_s: 0.84364 # Target mean motion n = sqrt(mu / a^3) = sqrt(1 / 1.12^3)
       initial_phase_rad: 0.0
       time_offset_s: 0.0
 
@@ -50,7 +50,7 @@ environment:
 training:
   is_ratio_reward: 1
   is_profile: 0
-  resume: 1
+  resume: 0
 
   # PPO Hyperparameters
   ppo:

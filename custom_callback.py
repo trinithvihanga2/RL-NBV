@@ -18,8 +18,11 @@ class NextBestViewCustomCallback(BaseCallback):
         super(NextBestViewCustomCallback, self).__init__(verbose)
         self.output_file = output_file
         self.verify_env = verify_env
-        self.test_env = test_env
-        self.step_size = getattr(test_env, 'max_step', 30)
+        self.step_size = (
+            step_size
+            if step_size is not None
+            else getattr(self.verify_env or self.test_env, 'max_step', 30)
+        )
         self.check_freq = check_freq
         self.cnt = 0
         self.best_coverage = -np.inf
@@ -75,39 +78,48 @@ class NextBestViewCustomCallback(BaseCallback):
         return True
 
     def _caculate_average_coverage(self):
-        model_size = self.test_env.shapenet_reader.model_num
+        eval_env = self.verify_env if self.verify_env is not None else self.test_env
+        model_size = eval_env.shapenet_reader.model_num
         average_coverage = np.zeros(self.step_size)
         
         # In a generic test env, it may be wrapped. Use its underlying attribute if present, or assume a default.
-        if hasattr(self.test_env, 'terminated_coverage'):
-            target_coverage = float(self.test_env.terminated_coverage)
+        if hasattr(eval_env, 'terminated_coverage'):
+            target_coverage = float(eval_env.terminated_coverage)
         else:
             target_coverage = 0.97
             
         reached_view_counts = []
         for model_id in range(model_size):
-            obs, _ = self.test_env.reset()
+            obs, _ = eval_env.reset()
             coverages = np.zeros(self.step_size)
             
-            # test_env.current_coverage might not be directly accessible if it's a VecEnv
-            if hasattr(self.test_env, 'current_coverage'):
-                coverages[0] = self.test_env.current_coverage
+            # eval_env.current_coverage might not be directly accessible if it's a VecEnv
+            if hasattr(eval_env, 'current_coverage'):
+                coverages[0] = eval_env.current_coverage
             else:
                 coverages[0] = 0.0 # Will be updated in step
                 
             average_coverage[0] += coverages[0]
             for step_id in range(self.step_size - 1):
                 action, _states = self.model.predict(obs, deterministic=True)
-                obs, rewards, terminated, truncated, info = self.test_env.step(action)
+                obs, rewards, terminated, truncated, info = eval_env.step(action)
                 
                 # Check if it's a VecEnv info (list of dicts) or a single env info (dict)
                 if isinstance(info, list) or isinstance(info, tuple):
                     current_cov = info[0].get("current_coverage", 0.0)
+                    is_done = bool(terminated[0] if isinstance(terminated, (list, np.ndarray)) else terminated) or bool(truncated[0] if isinstance(truncated, (list, np.ndarray)) else truncated)
                 else:
                     current_cov = info.get("current_coverage", 0.0)
+                    is_done = bool(terminated) or bool(truncated)
                     
                 coverages[step_id + 1] = current_cov
                 average_coverage[step_id + 1] += coverages[step_id + 1]
+
+                if is_done:
+                    for rem_step in range(step_id + 2, self.step_size):
+                        coverages[rem_step] = current_cov
+                        average_coverage[rem_step] += current_cov
+                    break
 
             reached_indices = np.where(coverages >= target_coverage)[0]
             if reached_indices.size > 0:
