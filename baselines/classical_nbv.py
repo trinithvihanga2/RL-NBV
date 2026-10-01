@@ -113,7 +113,9 @@ class VolumetricGreedyNBVPolicy:
         return action, None
 
     def _predict_sun_direction(self, t: float) -> np.ndarray:
-        omega = 0.1
+        omega = getattr(self.env, "sun_orbital_params", {}).get(
+            "angular_velocity_rad_per_s", 0.84364
+        )
         theta = -omega * t
         return np.array([np.cos(theta), np.sin(theta), 0.0], dtype=np.float32)
 
@@ -214,7 +216,9 @@ class CostAwareGreedyNBVPolicy:
         return action, None
 
     def _predict_sun_direction(self, t: float) -> np.ndarray:
-        omega = 0.1
+        omega = getattr(self.env, "sun_orbital_params", {}).get(
+            "angular_velocity_rad_per_s", 0.84364
+        )
         theta = -omega * t
         return np.array([np.cos(theta), np.sin(theta), 0.0], dtype=np.float32)
 

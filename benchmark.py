@@ -28,6 +28,9 @@ except ImportError:
     VolumetricGreedyNBVPolicy = None
     CostAwareGreedyNBVPolicy = None
 
+# Canonical Time Unit (TU) conversion factor: 1 m/s = 765.04 m/TU
+TIME_UNIT_S = 765.04
+
 
 def setup_logger(log_file: str = "./artefacts/benchmark/benchmark.log") -> logging.Logger:
     """Configure comprehensive logger outputting to both console and log file."""
@@ -257,6 +260,8 @@ def create_env(
         "time_cost_weight": env_config.get("time_cost_weight", 1.0),
         "fuel_budget": float(fuel_budget),
         "delta_v_weight": env_config.get("delta_v_weight", 1.0),
+        "collision_penalty_weight": float(env_config.get("collision_penalty_weight", 25.0)),
+        "collision_check_samples": int(env_config.get("collision_check_samples", 32)),
         "sun_position_config": env_config.get("sun_position", {}),
         "target_orbit_config": target_orbit_cfg,
         "state_reward_config": env_config.get("state_reward", {}),
@@ -368,6 +373,8 @@ def initial_record(
         else np.nan
     )
 
+    config_fuel_budget_tu = config_fuel_budget * TIME_UNIT_S
+
     return {
         "dataset_split": split_name,
         "policy": policy_name,
@@ -375,6 +382,7 @@ def initial_record(
         "model_name": model_name,
         "loop_id": loop_id,
         "config_fuel_budget": config_fuel_budget,
+        "config_fuel_budget_tu": config_fuel_budget_tu,
         "config_num_orbits": config_num_orbits,
         "config_max_step": config_max_step,
         "config_koz_radius": config_koz_radius,
@@ -382,13 +390,16 @@ def initial_record(
         "coverage": coverage,
         "coverage_gain": 0.0,
         "cumulative_dv": 0.0,
+        "cumulative_dv_tu": 0.0,
         "fuel_remaining": config_fuel_budget,
+        "fuel_remaining_tu": config_fuel_budget_tu,
         "fuel_consumed_fraction": 0.0,
         "step_travel_time": 0.0,
         "mission_time": 0.0,
         "time_remaining": max(0.0, total_time - mission_time),
         "reward": 0.0,
         "delta_v": 0.0,
+        "delta_v_tu": 0.0,
         "action_theta": np.nan,
         "action_phi": np.nan,
         "action_time": np.nan,
@@ -423,7 +434,11 @@ def run_evaluation(
         return records
 
     max_steps = int(config_params.get("max_step", getattr(env, "max_step", 30)))
-    config_fuel_budget = float(config_params.get("fuel_budget", env.fuel_budget))
+    config_fuel_budget = float(
+        config_params.get(
+            "fuel_budget", getattr(env, "fuel_budget", 76504.0) / TIME_UNIT_S
+        )
+    )
     config_num_orbits = float(config_params.get("num_orbits", 2.0))
     config_koz_radius = float(config_params.get("koz_radius", 0.95))
 
@@ -491,13 +506,17 @@ def run_evaluation(
                 )
                 total_time = get_total_time(env)
                 mission_time = scalar(info.get("mission_time"), 0.0)
-                cum_dv = scalar(
+                cum_dv_tu = scalar(
                     info.get("cumulative_dv"),
                     getattr(env, "cumulative_dv", 0.0),
                 )
+                cum_dv_ms = cum_dv_tu / TIME_UNIT_S
+                step_dv_tu = scalar(info.get("delta_v"), 0.0)
+                step_dv_ms = step_dv_tu / TIME_UNIT_S
+                config_fuel_budget_tu = config_fuel_budget * TIME_UNIT_S
                 fuel_consumed_frac = (
-                    float(cum_dv / config_fuel_budget)
-                    if config_fuel_budget > 0
+                    float(cum_dv_tu / config_fuel_budget_tu)
+                    if config_fuel_budget_tu > 0
                     else 0.0
                 )
                 cam_x = get_vector_component(env, "current_position", 0)
@@ -517,23 +536,24 @@ def run_evaluation(
                         "model_name": model_name,
                         "loop_id": loop_id,
                         "config_fuel_budget": config_fuel_budget,
+                        "config_fuel_budget_tu": config_fuel_budget_tu,
                         "config_num_orbits": config_num_orbits,
                         "config_max_step": max_steps,
                         "config_koz_radius": config_koz_radius,
                         "step": step,
                         "coverage": current_coverage,
                         "coverage_gain": current_coverage - previous_coverage,
-                        "cumulative_dv": cum_dv,
-                        "fuel_remaining": scalar(
-                            info.get("fuel_remaining"),
-                            max(0.0, config_fuel_budget - cum_dv),
-                        ),
+                        "cumulative_dv": cum_dv_ms,
+                        "cumulative_dv_tu": cum_dv_tu,
+                        "fuel_remaining": max(0.0, config_fuel_budget - cum_dv_ms),
+                        "fuel_remaining_tu": max(0.0, config_fuel_budget_tu - cum_dv_tu),
                         "fuel_consumed_fraction": fuel_consumed_frac,
                         "step_travel_time": scalar(info.get("travel_time"), 0.0),
                         "mission_time": mission_time,
                         "time_remaining": max(0.0, total_time - mission_time),
                         "reward": scalar(reward),
-                        "delta_v": scalar(info.get("delta_v"), 0.0),
+                        "delta_v": step_dv_ms,
+                        "delta_v_tu": step_dv_tu,
                         "action_theta": float(action[0]),
                         "action_phi": float(action[1]),
                         "action_time": float(action[2]),
@@ -600,67 +620,74 @@ def model_file_exists(model_path: str) -> bool:
     return os.path.isfile(model_path) or os.path.isfile(f"{model_path}.zip")
 
 
-# Default Curated Operational Matrix for Generalizability Evaluation
+# Default Curated Operational Matrix for Generalizability Evaluation (Physical Units: m/s)
 DEFAULT_PARAMETER_MATRIX = [
-    # In-Distribution Baseline (Trained Regime - 10 steps)
+    # ── Nominal Baseline (Trained Regime - 100 m/s physical, 2 orbits, 30 steps) ──
+    {
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "Nominal_100ms_2orb_s30",
+    },
+    # ── Step Horizon Sensitivity (10 steps vs 50 steps at nominal 100 m/s) ──
     {
         "fuel_budget": 100.0,
         "num_orbits": 2.0,
         "max_step": 10,
         "koz_radius": 0.95,
-        "label": "InDist_100m_2orb_Step10",
+        "label": "Horizon_100ms_2orb_s10",
     },
-    # In-Distribution Horizon (Trained Regime - 30 steps)
     {
         "fuel_budget": 100.0,
-        "num_orbits": 2.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "label": "InDist_100m_2orb_Step30",
-    },
-    # Extended Operational Envelope (Out-of-Distribution)
-    {
-        "fuel_budget": 200.0,
-        "num_orbits": 2.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "label": "OOD_200m_2orb_Step30",
-    },
-    {
-        "fuel_budget": 300.0,
-        "num_orbits": 3.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "label": "OOD_300m_3orb_Step30",
-    },
-    {
-        "fuel_budget": 500.0,
-        "num_orbits": 5.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "label": "OOD_500m_5orb_Step30",
-    },
-    {
-        "fuel_budget": 500.0,
         "num_orbits": 5.0,
         "max_step": 50,
         "koz_radius": 0.95,
-        "label": "OOD_500m_5orb_Step50",
+        "label": "Horizon_100ms_5orb_s50",
     },
-    # Safety Standoff Sensitivity Matrix
+    # ── Fuel Budget Sweep: [0.1, 0.5, 1.0, 50.0, 100.0] m/s (Steps=30, Orbits=2, KOZ=0.95) ──
     {
-        "fuel_budget": 500.0,
-        "num_orbits": 5.0,
+        "fuel_budget": 0.1,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "FuelSweep_0.1ms_2orb_s30",
+    },
+    {
+        "fuel_budget": 0.5,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "FuelSweep_0.5ms_2orb_s30",
+    },
+    {
+        "fuel_budget": 1.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "FuelSweep_1.0ms_2orb_s30",
+    },
+    {
+        "fuel_budget": 50.0,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "FuelSweep_50ms_2orb_s30",
+    },
+    # ── Safety Standoff (KOZ) Sensitivity Matrix at nominal 100 m/s ──
+    {
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.85,
         "label": "KOZ_0.85_Tight",
     },
     {
-        "fuel_budget": 500.0,
-        "num_orbits": 5.0,
+        "fuel_budget": 100.0,
+        "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 1.05,
-        "label": "KOZ_1.05_Wide",
+        "label": "KOZ_1.05_Relaxed",
     },
 ]
 
@@ -706,7 +733,7 @@ def print_summary_table(
     })
 
     for _, row in summary.iterrows():
-        cfg_name = f"{int(row['config_fuel_budget'])}m_{int(row['config_num_orbits'])}orb_s{int(row['config_max_step'])}_k{row['config_koz_radius']:.2f}"
+        cfg_name = f"{row['config_fuel_budget']:g}ms_{int(row['config_num_orbits'])}orb_s{int(row['config_max_step'])}_k{row['config_koz_radius']:.2f}"
         cov_pct = row["coverage"] * 100.0
         dv_val = row["cumulative_dv"]
         steps_val = row["step"]
@@ -914,7 +941,7 @@ def main() -> None:
                     "num_orbits": n_o,
                     "max_step": m_s,
                     "koz_radius": k_r,
-                    "label": f"Combo_{int(f_b)}m_{int(n_o)}orb_s{m_s}_koz{k_r}",
+                    "label": f"Combo_{f_b:g}ms_{int(n_o)}orb_s{m_s}_koz{k_r}",
                 }
             )
     elif (
@@ -939,7 +966,7 @@ def main() -> None:
                         "num_orbits": n_o,
                         "max_step": m_s,
                         "koz_radius": k_r,
-                        "label": f"Matrix_{int(f_b)}m_{int(n_o)}orb_step{m_s}_koz{k_r}",
+                        "label": f"Matrix_{f_b:g}ms_{int(n_o)}orb_step{m_s}_koz{k_r}",
                     }
                 )
         else:
@@ -961,7 +988,7 @@ def main() -> None:
                         "num_orbits": n_o,
                         "max_step": m_s,
                         "koz_radius": k_r,
-                        "label": f"Config_{i+1}_{int(f_b)}m_{int(n_o)}orb_s{m_s}",
+                        "label": f"Config_{i+1}_{f_b:g}ms_{int(n_o)}orb_s{m_s}",
                     }
                 )
     else:
@@ -980,7 +1007,8 @@ def main() -> None:
     all_records = []
 
     for cfg_idx, cfg_params in enumerate(matrix_configs, 1):
-        f_budget = cfg_params["fuel_budget"]
+        f_budget_ms = float(cfg_params["fuel_budget"])
+        f_budget_tu = f_budget_ms * TIME_UNIT_S
         n_orbits = cfg_params["num_orbits"]
         m_step = cfg_params["max_step"]
         k_radius = cfg_params["koz_radius"]
@@ -993,7 +1021,7 @@ def main() -> None:
             f"=== MATRIX CONFIG [{cfg_idx}/{len(matrix_configs)}]: {cfg_label} ==="
         )
         logger.info(
-            f"=== Fuel: {f_budget} m/s | Orbits: {n_orbits} | Steps: {m_step} | KOZ: {k_radius} ==="
+            f"=== Fuel: {f_budget_ms:g} m/s ({f_budget_tu:.1f} m/TU) | Orbits: {n_orbits} | Steps: {m_step} | KOZ: {k_radius} ==="
         )
         logger.info(
             "=========================================================================="
@@ -1017,7 +1045,7 @@ def main() -> None:
                     env = create_env(
                         data_path=data_path,
                         config=config,
-                        fuel_budget=f_budget,
+                        fuel_budget=f_budget_tu,
                         num_orbits=n_orbits,
                         max_step=m_step,
                         koz_radius=k_radius,
@@ -1128,7 +1156,7 @@ def main() -> None:
                                 env=env,
                                 num_candidates=32,
                                 orbit_radius=float(env.orbit_config.orbit_radius),
-                                fuel_budget=f_budget,
+                                fuel_budget=f_budget_tu,
                                 total_time=get_total_time(env),
                             )
                             all_records.extend(
