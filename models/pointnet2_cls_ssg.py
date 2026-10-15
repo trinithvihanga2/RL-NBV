@@ -119,11 +119,11 @@ class PointNetFeatureExtraction(BaseFeaturesExtractor):
 class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
     """
     Feature extractor for continuous-action PPO.
-    Drops view_state (33-dim), adds camera_pos (3), coverage (1),
-    fuel_remaining (1), time_remaining (1) → 6 scalars total.
-    PointNet FC head outputs 122 dims; concat → 128 total.
+    Drops view_state (33-dim), adds camera_pos (3), sun_direction (3), coverage (1),
+    fuel_remaining (1), time_remaining (1) → 9 scalars total.
+    PointNet FC head outputs 119 dims; concat → 128 total.
     """
-    SCALAR_DIM = 6  # camera_pos(3) + coverage(1) + fuel(1) + time(1)
+    SCALAR_DIM = 9  # camera_pos(3) + sun_direction(3) + coverage(1) + fuel(1) + time(1)
 
     def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 128):
         super().__init__(observation_space, features_dim)
@@ -143,7 +143,7 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
             in_channel=256 + 3, mlp=[256, 512, 1024], group_all=True
         )
         
-        # FC head outputs features_dim - SCALAR_DIM (128 - 6 = 122)
+        # FC head outputs features_dim - SCALAR_DIM (128 - 9 = 119)
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)
         self.drop1 = nn.Dropout(0.4)
@@ -156,11 +156,12 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
         # Process point cloud
         xyz = observations["current_point_cloud"]          # (B, 3, N)
         cam = observations["camera_position"]              # (B, 3)
+        sun = observations["sun_direction"]                # (B, 3)
         cov = observations["coverage"]                     # (B, 1)
         fuel = observations["fuel_remaining"]              # (B, 1)
         time_ = observations["time_remaining"]             # (B, 1)
 
-        scalars = torch.cat([cam, cov, fuel, time_], dim=1)  # (B, 6)
+        scalars = torch.cat([cam, sun, cov, fuel, time_], dim=1)  # (B, 9)
 
         B, _, _ = xyz.shape
         norm = None

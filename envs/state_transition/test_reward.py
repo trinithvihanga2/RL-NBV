@@ -12,11 +12,11 @@ def test_calculate_continuous_reward_basic():
         max_delta_v=10.0,
         collision_penalty=0.0
     )
-    # basic reward = cover_add * 10 = 1.0
+    # basic reward = cover_add * 1000 = 100.0
     # normalized_travel_time = 1.0 * 10 / 10 = 1.0, time penalty = 1.0
     # normalized_delta_v = 1.0 * 10 / 10 = 1.0, fuel penalty = 1.0
-    # reward = 1.0 - 1.0 - 1.0 = -1.0
-    assert pytest.approx(reward) == -1.0
+    # reward = 100.0 - 1.0 - 1.0 = 98.0
+    assert pytest.approx(reward) == 98.0
 
 def test_calculate_continuous_reward_ratio():
     reward = calculate_continuous_reward(
@@ -31,8 +31,8 @@ def test_calculate_continuous_reward_ratio():
         is_ratio_reward=True
     )
     # remain = 1.0 - (0.9 - 0.1) = 0.2
-    # reward = (0.1 / 0.2) * 10 = 5.0
-    assert pytest.approx(reward) == 5.0
+    # reward = (0.1 / 0.2) * 1000 = 500.0
+    assert pytest.approx(reward) == 500.0
 
 def test_calculate_continuous_reward_with_cur_coverage():
     reward = calculate_continuous_reward(
@@ -47,8 +47,8 @@ def test_calculate_continuous_reward_with_cur_coverage():
         is_reward_with_cur_coverage=True
     )
     # remain = 1.0 - (0.9 - 0.1) = 0.2
-    # reward = (0.1 / 0.2) * 5 + 0.1 * 5 = 2.5 + 0.5 = 3.0
-    assert pytest.approx(reward) == 3.0
+    # reward = (0.1 / 0.2) * 500 + 0.1 * 500 = 250 + 50 = 300.0
+    assert pytest.approx(reward) == 300.0
 
 def test_calculate_continuous_reward_collision():
     reward = calculate_continuous_reward(

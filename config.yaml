@@ -17,8 +17,8 @@ environment:
   is_ratio_reward: 1
   is_reward_with_cur_coverage: 0
   cur_coverage_ratio: 1.0
-  time_cost_weight: 1.0
-  delta_v_weight: 1.0
+  time_cost_weight: 0.2
+  delta_v_weight: 0.2
   fuel_budget: 76504.0 # 100 m/s translated to m/TU (100 * 765.04)
   target_orbit:
     orbit_radius: 1.12
@@ -56,12 +56,12 @@ training:
   ppo:
     learning_rate: 0.0003
     n_steps: 2048
-    batch_size: 32
+    batch_size: 128
     n_epochs: 10
     gamma: 0.99
     gae_lambda: 0.95
     clip_range: 0.2
-    ent_coef: 0.01
+    ent_coef: 0.02
     vf_coef: 0.5
     max_grad_norm: 0.5
     total_steps: 1000000

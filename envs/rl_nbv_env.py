@@ -140,6 +140,9 @@ class PointCloudNextBestViewEnv(gym.Env):
                     dtype=np.float64,
                 ),
                 "camera_position": spaces.Box(
+                    low=-1.5, high=1.5, shape=(3,), dtype=np.float32
+                ),
+                "sun_direction": spaces.Box(
                     low=-1.0, high=1.0, shape=(3,), dtype=np.float32
                 ),
                 "coverage": spaces.Box(
@@ -587,9 +590,16 @@ class PointCloudNextBestViewEnv(gym.Env):
             )
             cur_pc = cur_pc.T
 
+        if hasattr(self, "current_sun_position") and self.current_sun_position is not None:
+            sun_norm = float(np.linalg.norm(self.current_sun_position))
+            sun_dir = (self.current_sun_position / max(sun_norm, 1e-8)).astype(np.float32)
+        else:
+            sun_dir = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
         return {
             "current_point_cloud": cur_pc.astype(np.float32),
             "camera_position": self.current_position.astype(np.float32),
+            "sun_direction": sun_dir,
             "coverage": np.array([self.current_coverage * 2.0 - 1.0], dtype=np.float32),
             "fuel_remaining": np.array(
                 [(max(0.0, self.fuel_budget - self.cumulative_dv) / self.fuel_budget) * 2.0 - 1.0],
