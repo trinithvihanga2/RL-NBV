@@ -121,14 +121,14 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
     Feature extractor for continuous-action PPO.
     Drops view_state (33-dim), adds camera_pos (3), sun_direction (3), coverage (1),
     fuel_remaining (1), time_remaining (1) → 9 scalars total.
-    PointNet FC head outputs 119 dims; concat → 128 total.
+    PointNet FC head outputs 64 dims and scalar MLP outputs 64 dims; concat → 128 total.
     """
     SCALAR_DIM = 9  # camera_pos(3) + sun_direction(3) + coverage(1) + fuel(1) + time(1)
 
     def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 128):
         super().__init__(observation_space, features_dim)
         
-        # PointNet++ SA layers (identical to discrete version)
+        # PointNet++ SA layers (identical to discrete version for pretrained transfer)
         in_channel = 3
         self.sa1 = PointNetSetAbstraction(
             npoint=512, radius=0.2, nsample=32,
@@ -143,14 +143,25 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
             in_channel=256 + 3, mlp=[256, 512, 1024], group_all=True
         )
         
-        # FC head outputs features_dim - SCALAR_DIM (128 - 9 = 119)
+        pc_out_dim = features_dim // 2
+        scalar_out_dim = features_dim - pc_out_dim
+
+        # Disable dropout for on-policy PPO stability (prevents rollout/train ratio mismatch)
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)
-        self.drop1 = nn.Dropout(0.4)
+        self.drop1 = nn.Identity()
         self.fc2 = nn.Linear(512, 256)
         self.bn2 = nn.BatchNorm1d(256)
-        self.drop2 = nn.Dropout(0.4)
-        self.fc3 = nn.Linear(256, features_dim - self.SCALAR_DIM)
+        self.drop2 = nn.Identity()
+        self.fc3 = nn.Linear(256, pc_out_dim)
+
+        # Dedicated MLP embedding for orbital/pose/resource scalars
+        self.scalar_mlp = nn.Sequential(
+            nn.Linear(self.SCALAR_DIM, 64),
+            nn.ReLU(),
+            nn.Linear(64, scalar_out_dim),
+            nn.Tanh(),
+        )
     
     def forward(self, observations: gym.spaces.Dict):
         # Process point cloud
@@ -162,6 +173,7 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
         time_ = observations["time_remaining"]             # (B, 1)
 
         scalars = torch.cat([cam, sun, cov, fuel, time_], dim=1)  # (B, 9)
+        scalar_feat = self.scalar_mlp(scalars)                    # (B, 64)
 
         B, _, _ = xyz.shape
         norm = None
@@ -172,9 +184,9 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
         x = self.drop1(F.relu(self.bn1(self.fc1(x))))
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
-        x = torch.tanh(x)  # bound to [-1, 1] for scale consistency with scalars
+        x = torch.tanh(x)  # bound to [-1, 1] for scale consistency
         
-        return torch.cat([x, scalars], dim=1)              # (B, 128)
+        return torch.cat([x, scalar_feat], dim=1)          # (B, 128)
 
 
 class get_loss(nn.Module):

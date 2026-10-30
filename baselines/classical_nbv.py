@@ -83,6 +83,10 @@ class VolumetricGreedyNBVPolicy:
         cam_pos = obs["camera_position"]
         current_time = getattr(self.env, "current_time", 0.0)
         
+        orbit_cfg = getattr(self.env, "orbit_config", None)
+        t_min = float(getattr(orbit_cfg, "min_transfer_time", 0.2))
+        t_max = float(getattr(orbit_cfg, "max_transfer_time", 2.0))
+
         # Candidate duration (nominal feasible multi-node transfer)
         tau = 1.5
         predicted_time = current_time + tau
@@ -108,7 +112,8 @@ class VolumetricGreedyNBVPolicy:
                 break
                 
         self.step_idx += 1
-        time_norm = float((tau / (getattr(self.env, "total_time", 14.89) / 2.0)) - 1.0)
+        time_norm = float(2.0 * (tau - t_min) / max(t_max - t_min, 1e-6) - 1.0)
+        time_norm = float(np.clip(time_norm, -1.0, 1.0))
         action = cartesian_to_action(selected_view, self.orbit_radius, duration_norm=time_norm)
         return action, None
 
@@ -210,8 +215,12 @@ class CostAwareGreedyNBVPolicy:
                     best_tau = tau
                     
         self.step_idx += 1
-        # Map tau to normalized action
-        time_norm = float((best_tau / (self.total_time / 2.0)) - 1.0)
+        # Map tau to normalized action in [-1, 1] matching env.step()
+        orbit_cfg = getattr(self.env, "orbit_config", None)
+        t_min = float(getattr(orbit_cfg, "min_transfer_time", 0.2))
+        t_max = float(getattr(orbit_cfg, "max_transfer_time", 2.0))
+        time_norm = float(2.0 * (best_tau - t_min) / max(t_max - t_min, 1e-6) - 1.0)
+        time_norm = float(np.clip(time_norm, -1.0, 1.0))
         action = cartesian_to_action(best_view, self.orbit_radius, duration_norm=time_norm)
         return action, None
 

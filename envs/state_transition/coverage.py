@@ -31,20 +31,21 @@ def update_continuous_coverage(
     if new_points.shape[0] == 0:
         return prev_coverage_map.copy(), current_coverage, 0.0
 
-    # Convert to tensors
-    new_points_tensor = torch.tensor(
-        new_points[np.newaxis, :, :].astype(np.float32)
-    ).to(device)
+    with torch.no_grad():
+        # Convert to tensor directly on target device without building autograd graph
+        new_points_tensor = torch.as_tensor(
+            new_points[np.newaxis, :, :], dtype=torch.float32, device=device
+        )
 
-    # Calculate distance from new points to ground truth using cached tensor
-    _, dist_to_gt = chamfer_distance_function.apply(
-        new_points_tensor, canonical_tensor
-    )
+        # Calculate distance from new points to ground truth using cached tensor
+        _, dist_to_gt = chamfer_distance_function.apply(
+            new_points_tensor, canonical_tensor
+        )
 
-    # dist_to_gt[i] = distance from canonical point i to nearest new point
-    newly_covered_mask = (
-        dist_to_gt.detach().cpu().numpy()[0] < coverage_threshold
-    )
+        # dist_to_gt[i] = distance from canonical point i to nearest new point
+        newly_covered_mask = (
+            dist_to_gt.detach().cpu().numpy()[0] < coverage_threshold
+        )
 
     # Merge into persistent coverage map
     updated_coverage_map = prev_coverage_map | newly_covered_mask

@@ -29,6 +29,8 @@ class NextBestViewCustomCallback(BaseCallback):
         self.best_model_path = best_model_path
         self.save_freq = save_freq
         self.save_path = save_path or "."
+        self._last_save_step = 0
+        self._last_eval_step = 0
 
     def _init_callback(self) -> None:
         if self.save_path:
@@ -44,9 +46,11 @@ class NextBestViewCustomCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         eval_due_to_checkpoint = False
+        current_step = self.num_timesteps if self.num_timesteps > 0 else self.n_calls
 
         # 1. Periodic Checkpoint
-        if self.save_freq and self.n_calls % self.save_freq == 0:
+        if self.save_freq and (current_step - self._last_save_step) >= self.save_freq:
+            self._last_save_step = current_step
             path = os.path.join(
                 self.save_path, f"rl_nbv_periodic_{self.num_timesteps}_steps"
             )
@@ -59,10 +63,11 @@ class NextBestViewCustomCallback(BaseCallback):
 
         # 2. Evaluation & Best Model Checkpoint
         eval_due_to_check_freq = bool(
-            self.check_freq and self.n_calls % self.check_freq == 0
+            self.check_freq and (current_step - self._last_eval_step) >= self.check_freq
         )
 
         if eval_due_to_checkpoint or eval_due_to_check_freq:
+            self._last_eval_step = current_step
             with open(self.output_file, "a+", encoding="utf-8") as f:
                 f.write("------ {} ------\n".format(self.cnt))
             self.cnt += 1

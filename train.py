@@ -157,6 +157,10 @@ def config_to_args(config):
 def setup_gpu(device_str, logger):
     cudnn.benchmark = True
     cudnn.deterministic = False
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
     if torch.cuda.is_available():
         device_id = int(device_str.split(":")[-1]) if ":" in device_str else 0
         torch.cuda.set_device(device_id)
@@ -660,6 +664,8 @@ if __name__ == "__main__":
         features_extractor_kwargs=dict(features_dim=128),
         net_arch=dict(pi=[256, 128], vf=[256, 128]),
         optimizer_class=optim.adamw.AdamW,
+        optimizer_kwargs=dict(weight_decay=1e-4),
+        log_std_init=-0.5,
     )
 
     # ── Model ─────────────────────────────────────────────────────────────────

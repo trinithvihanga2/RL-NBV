@@ -102,11 +102,18 @@ def solve_cw_koz(
     N = len(tvec) - 1
     dts = np.diff(tvec)
     dvlim = opts.alim * dts
+    terminal_dvlim = float(dvlim[-1]) if len(dvlim) > 0 else float(opts.alim)
 
     X = cp.Variable((N + 1, 6), name="X")
-    U = cp.Variable((N, 3), name="U")
+    U = cp.Variable((N + 1, 3), name="U")
 
-    constraints = [X[0, :] == x0, X[-1, :] == xf]
+    # X[N, :] is the state at arrival before the terminal braking impulse U[N, :]
+    constraints = [
+        X[0, :] == x0,
+        X[-1, :3] == xf[:3],
+        X[-1, 3:] + U[N, :] == xf[3:],
+        cp.norm(U[N, :], 2) <= terminal_dvlim,
+    ]
 
     for i in range(N):
         A, B = cw_stm(opts.n, dts[i])
@@ -123,10 +130,11 @@ def solve_cw_koz(
 
     status = problem.status
     feasible = status in ("optimal", "optimal_inaccurate")
-    if feasible and X.value is not None:
-        traj = np.asarray(X.value)
-        ctrls = np.asarray(U.value)
-        dvs = np.vstack([ctrls, np.zeros((1, 3))])
+    if feasible and X.value is not None and U.value is not None:
+        traj = np.asarray(X.value, dtype=float).copy()
+        # Apply terminal braking impulse to record final rest velocity at node N
+        traj[-1, 3:] = traj[-1, 3:] + np.asarray(U.value[N, :], dtype=float)
+        dvs = np.asarray(U.value, dtype=float)
         cost = float(problem.value)
         return traj, dvs, cost, True, status
     return None, None, float("inf"), False, status
@@ -157,7 +165,8 @@ def fly_around_traj_gen(
     if np.linalg.norm(xf[:3]) <= opts.rKOZ:
         raise ValueError("xf lies inside the KOZ.")
 
-    tvec = np.unique(np.concatenate([np.arange(0.0, TOF, opts.dt), [TOF]]))
+    dt_eff = min(float(opts.dt), float(TOF) / 4.0) if TOF > 0.0 else float(opts.dt)
+    tvec = np.unique(np.concatenate([np.arange(0.0, TOF, dt_eff), [TOF]]))
     N = len(tvec) - 1
 
     # Straight-line state guess (positions and velocities interpolated).

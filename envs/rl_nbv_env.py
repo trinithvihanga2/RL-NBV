@@ -14,6 +14,7 @@ from envs.state_transition import (
     calculate_sun_position,
 )
 import logging
+import open3d as o3d
 from envs.utils import resample_pcd, random_position_on_sphere, estimate_surface_normals
 from envs.rendering import EnvironmentRenderer
 from envs.state_transition.reward import calculate_continuous_reward
@@ -109,8 +110,9 @@ class PointCloudNextBestViewEnv(gym.Env):
             orbit_radius=float(target_orbit_config.get("orbit_radius", 1.0)),
             grav_param=float(target_orbit_config.get("grav_param", 1.0)),
             num_orbits=float(target_orbit_config.get("num_orbits", 2.0)),
-            min_transfer_time=float(target_orbit_config.get("min_transfer_time", 1e-6)),
+            min_transfer_time=float(target_orbit_config.get("min_transfer_time", 0.2)),
             unit_scale=float(target_orbit_config.get("unit_scale", 1.0)),
+            max_transfer_time=float(target_orbit_config.get("max_transfer_time", 2.0)),
         )
 
         self.current_position = random_position_on_sphere(self.orbit_config.orbit_radius)
@@ -167,7 +169,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.reward_config = {
             "revisit_penalty": -5.0,
             "coverage_coeff": 1.0,
-            "good_coverage_threshold": 0.01,
+            "good_coverage_threshold": 0.0,
             "near_distance_threshold": 0.2,
         }
         self.reward_config.update(dict(state_reward_config))
@@ -188,18 +190,30 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
 
         self.scp_planner_config = scp_planner_config or {}
-        self.cw = CWDynamics(self.orbit_config.mean_motion, scp_config=self.scp_planner_config)
+        self.cw = CWDynamics(
+            self.orbit_config.mean_motion,
+            scp_config=self.scp_planner_config,
+            unit_scale=self.orbit_config.unit_scale,
+        )
 
-        # Set max normalization bounds based on theoretical orbital limits.
-        self.max_travel_time = float(self.orbit_config.total_time)
-        # Max theoretical delta-v roughly scales with orbit velocity:
+        # Set max normalization bounds based on single-step transfer & orbital limits.
+        self.max_travel_time = float(self.orbit_config.max_transfer_time)
+        # Upper-bound single-step rest-to-rest CW transfer delta-v on the inspection sphere:
         v_orbit = self.orbit_config.mean_motion * self.orbit_config.orbit_radius
-        self.max_delta_v = float(2.0 * v_orbit * self.orbit_config.unit_scale)
+        v_rest_to_rest = (
+            2.0
+            * np.pi
+            * self.orbit_config.orbit_radius
+            / max(float(self.orbit_config.min_transfer_time), 0.5)
+        )
+        self.max_delta_v = float(
+            max(2.0 * v_orbit, v_rest_to_rest) * self.orbit_config.unit_scale
+        )
 
         # Current mission time (starts at 0.0, increments as agent moves)
         self.current_time = 0.0
         
-        # Track positions that yielded good coverage to penalize revisiting them
+        # Track visited positions to penalize revisiting them
         self.good_positions = []
 
         # ============================================================================
@@ -234,10 +248,57 @@ class PointCloudNextBestViewEnv(gym.Env):
         self._model_transition_cache = {}
         self._mesh_cache = {}
         self._initialize_state_transition_for_current_model()
-        self.current_points_cloud = self.renderer.get_points_from_position(
+        self._initialize_initial_view()
+        self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
+
+    def _accumulate_point_cloud(self, new_view_points: np.ndarray, voxel_size: float = 0.025):
+        if new_view_points is None or new_view_points.shape[0] == 0:
+            return
+        if self.current_points_cloud.shape[0] > 0:
+            combined = np.vstack([self.current_points_cloud, new_view_points])
+        else:
+            combined = np.asarray(new_view_points, dtype=np.float32)
+
+        opcd = o3d.geometry.PointCloud()
+        opcd.points = o3d.utility.Vector3dVector(combined.astype(np.float64))
+        voxel_pcd = opcd.voxel_down_sample(voxel_size=voxel_size)
+        downsampled = np.asarray(voxel_pcd.points, dtype=np.float32)
+
+        if downsampled.shape[0] > MAX_CLOUD_SIZE:
+            idx = np.random.choice(downsampled.shape[0], MAX_CLOUD_SIZE, replace=False)
+            downsampled = downsampled[idx]
+        self.current_points_cloud = downsampled
+
+    def _initialize_initial_view(self):
+        self.current_points_cloud = np.zeros((0, 3), dtype=np.float32)
+        initial_points = self.renderer.get_points_from_position(
             self.current_position, self._canonical_points
         )
-        self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
+        if initial_points.shape[0] > 0:
+            if (
+                hasattr(self.renderer, "last_rendered_normals")
+                and self.renderer.last_rendered_normals.shape == initial_points.shape
+            ):
+                normals = self.renderer.last_rendered_normals
+            else:
+                normals = estimate_surface_normals(
+                    initial_points, camera_position=self.current_position
+                )
+            initial_points = filter_lit_points(
+                initial_points, normals, self.current_sun_position
+            )
+        self._accumulate_point_cloud(initial_points)
+        self._coverage_map, self.current_coverage, _ = update_continuous_coverage(
+            initial_points,
+            self._canonical_tensor,
+            self._coverage_map,
+            self.current_coverage,
+            self.ground_truth_points_cloud_size,
+            self.COVERAGE_THRESHOLD,
+            ChamferDistanceFunction,
+            self.DEVICE,
+        )
+        self.good_positions = [self.current_position.copy()]
 
     def _initialize_state_transition_for_current_model(self):
         model_name = self.shapenet_reader.get_model_info()
@@ -285,7 +346,9 @@ class PointCloudNextBestViewEnv(gym.Env):
         
         theta = (norm_theta + 1.0) * (np.pi / 2.0)
         phi = (norm_phi + 1.0) * np.pi
-        requested_transfer_time = (norm_time + 1.0) * (self.orbit_config.total_time / 2.0)
+        t_min = float(self.orbit_config.min_transfer_time)
+        t_max = float(self.orbit_config.max_transfer_time)
+        requested_transfer_time = t_min + 0.5 * (norm_time + 1.0) * (t_max - t_min)
 
         # Convert spherical to Cartesian coordinates
         r = self.orbit_config.orbit_radius
@@ -299,7 +362,16 @@ class PointCloudNextBestViewEnv(gym.Env):
         if remaining_time <= 0.0:
             travel_time = 0.0
         else:
-            travel_time = float(np.clip(requested_transfer_time, self.orbit_config.min_transfer_time, remaining_time))
+            upper_bound = max(
+                float(self.orbit_config.min_transfer_time), float(remaining_time)
+            )
+            travel_time = float(
+                np.clip(
+                    requested_transfer_time,
+                    self.orbit_config.min_transfer_time,
+                    upper_bound,
+                )
+            )
 
         # 3. Compute Δv via CW dynamics (using pre-initialized instance)
         # Apply the real-world SI unit scale (e.g. 6.25m) so Delta-V is in SI units
@@ -309,8 +381,15 @@ class PointCloudNextBestViewEnv(gym.Env):
         if delta_v == np.inf:
             delta_v = self.max_delta_v  # fallback for singular transfers
 
+        traj_canonical = (
+            self.cw.last_trajectory / self.orbit_config.unit_scale
+            if (hasattr(self.cw, "last_trajectory") and self.cw.last_trajectory is not None)
+            else None
+        )
         collision_detected, collision_penalty, collision_min_clearance = (
-            self.renderer.check_transfer_collision(r0, rf, travel_time)
+            self.renderer.check_transfer_collision(
+                self.current_position, new_position, travel_time, trajectory=traj_canonical
+            )
         )
         if collision_detected:
             reward = calculate_continuous_reward(
@@ -368,19 +447,19 @@ class PointCloudNextBestViewEnv(gym.Env):
         # 4. Get visible points from new position
         new_view_points = self.renderer.get_points_from_position(new_position, self._canonical_points)
         if new_view_points.shape[0] > 0:
-            normals = estimate_surface_normals(new_view_points)
+            if (
+                hasattr(self.renderer, "last_rendered_normals")
+                and self.renderer.last_rendered_normals.shape == new_view_points.shape
+            ):
+                normals = self.renderer.last_rendered_normals
+            else:
+                normals = estimate_surface_normals(
+                    new_view_points, camera_position=new_position
+                )
             new_view_points = filter_lit_points(new_view_points, normals, self.current_sun_position)
 
-        # 5. Update coverage
-        self.current_points_cloud = np.append(
-            self.current_points_cloud, new_view_points, axis=0
-        )
-        # Cap point cloud size to prevent unbounded growth
-        if self.current_points_cloud.shape[0] > MAX_CLOUD_SIZE:
-            idx = np.random.choice(
-                self.current_points_cloud.shape[0], MAX_CLOUD_SIZE, replace=False
-            )
-            self.current_points_cloud = self.current_points_cloud[idx]
+        # 5. Update coverage & accumulate voxel-downsampled point cloud
+        self._accumulate_point_cloud(new_view_points)
         self._coverage_map, self.current_coverage, coverage_gain = update_continuous_coverage(
             new_view_points,
             self._canonical_tensor,
@@ -392,17 +471,22 @@ class PointCloudNextBestViewEnv(gym.Env):
             self.DEVICE,
         )
 
-        # 5.5 Check for revisiting near previously good positions
+        # 5.5 Check for revisiting near previously visited positions
         revisit_penalty_val = 0.0
+        min_dist_to_visited = float("inf")
         if len(self.good_positions) > 0:
             distances = np.linalg.norm(np.array(self.good_positions) - new_position, axis=1)
-            if np.min(distances) < self.reward_config.get("near_distance_threshold", 0.2):
+            min_dist_to_visited = float(np.min(distances))
+            if min_dist_to_visited < self.reward_config.get("near_distance_threshold", 0.2):
                 revisit_penalty_val = self.reward_config.get("revisit_penalty", -5.0)
-                self.logger.debug(f"[REVISIT] Near a good position! Penalty: {revisit_penalty_val}")
+                self.logger.debug(f"[REVISIT] Near a visited position! Penalty: {revisit_penalty_val}")
 
-        # If coverage gain was good, remember this position
-        if coverage_gain >= self.reward_config.get("good_coverage_threshold", 0.01):
-            self.good_positions.append(new_position)
+        # Remember visited position to prevent stationary hovering (avoid exact duplicates)
+        if (
+            coverage_gain >= self.reward_config.get("good_coverage_threshold", 0.0)
+            and min_dist_to_visited >= 1e-4
+        ):
+            self.good_positions.append(new_position.copy())
 
         # 6. Update state
         self.current_position = new_position
@@ -504,10 +588,7 @@ class PointCloudNextBestViewEnv(gym.Env):
         )
 
         self._initialize_state_transition_for_current_model()
-
-        self.current_points_cloud = self.renderer.get_points_from_position(
-            self.current_position, self._canonical_points
-        )
+        self._initialize_initial_view()
 
         observation = self._get_observation_space()
         info = self._get_info()

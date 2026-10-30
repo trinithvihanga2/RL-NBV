@@ -58,9 +58,25 @@ def random_position_on_sphere(radius=1.0):
 
     return np.array([x, y, z], dtype=np.float32)
 
-def estimate_surface_normals(points):
+def estimate_surface_normals(points, camera_position=None):
     if points.shape[0] == 0:
         return np.zeros((0, 3), dtype=np.float32)
+    if camera_position is not None:
+        # Target model is centered at the origin (0, 0, 0) in canonical space
+        vectors = np.asarray(points, dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        normals = vectors / np.maximum(norms, 1e-12)
+        view_vecs = np.asarray(camera_position, dtype=np.float32).reshape(1, 3) - vectors
+        view_norms = np.linalg.norm(view_vecs, axis=1, keepdims=True)
+        view_dirs = view_vecs / np.maximum(view_norms, 1e-12)
+        degenerate = norms[:, 0] <= 1e-12
+        if np.any(degenerate):
+            normals[degenerate] = view_dirs[degenerate]
+        # Ensure outward normals face the observing camera
+        flip_mask = np.sum(normals * view_dirs, axis=1) < 0.0
+        normals[flip_mask] = -normals[flip_mask]
+        return normals.astype(np.float32)
+
     centroid = np.mean(points, axis=0, keepdims=True)
     vectors = points - centroid
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)

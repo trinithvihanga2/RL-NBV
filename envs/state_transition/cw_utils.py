@@ -176,15 +176,25 @@ class CWDynamics:
         With our defaults (μ=1, a=1) this is 1.0.
     """
 
-    def __init__(self, mean_motion: float, scp_config: dict = {
+    def __init__(
+        self,
+        mean_motion: float,
+        scp_config: dict = {
             "koz_radius": 0.95,
             "alim": 1000.0,
             "dt": 0.5,
             "max_iter": 20,
-            "solver": "ECOS"
-        }):
+            "solver": "ECOS",
+        },
+        unit_scale: float = 1.0,
+    ):
         self.n = mean_motion
-        self.scp_config = scp_config
+        self.scp_config = scp_config or {}
+        self.unit_scale = float(
+            self.scp_config.get("unit_scale", unit_scale)
+            if isinstance(self.scp_config, dict)
+            else unit_scale
+        )
         self.last_trajectory = None
 
     # -------------------------------------------------------------------------
@@ -226,19 +236,27 @@ class CWDynamics:
         vf : np.ndarray or None
             The final control impulse vector from the generated trajectory.
         """
-        # Trivial case: no movement needed
-        if t <= 0.0:
+        r0 = np.asarray(r0, dtype=float).reshape(3)
+        rf = np.asarray(rf, dtype=float).reshape(3)
+
+        # Trivial case: no movement needed or zero transfer time
+        if t <= 0.0 or np.allclose(r0, rf, atol=1e-7):
             self.last_trajectory = np.array([r0, rf])
             return 0.0, np.zeros(3), np.zeros(3)
+
+        # Scale KOZ radius and convergence tolerance consistently with r0/rf unit_scale
+        r_koz = float(self.scp_config.get("koz_radius", 0.95)) * self.unit_scale
+        tol = float(self.scp_config.get("tol", 1e-2)) * self.unit_scale
 
         # Construct FlyAroundOpts
         opts = FlyAroundOpts(
             n=self.n,
-            rKOZ=float(self.scp_config.get("koz_radius", 0.95)),
+            rKOZ=r_koz,
             alim=float(self.scp_config.get("alim", 1000.0)),
             dt=float(self.scp_config.get("dt", 0.5)),
             max_iter=int(self.scp_config.get("max_iter", 20)),
-            solver=self.scp_config.get("solver", "ECOS")
+            tol=tol,
+            solver=self.scp_config.get("solver", "ECOS"),
         )
         
         # Prepare start and end states [r, v] where v=0

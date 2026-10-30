@@ -65,6 +65,7 @@ def setup_logger(log_file: str = "./artefacts/benchmark/benchmark.log") -> loggi
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+        logger.propagate = False
 
         # Attach file handler to root logger and environment loggers so all subsystem logs are preserved
         root_logger = logging.getLogger()
@@ -74,6 +75,7 @@ def setup_logger(log_file: str = "./artefacts/benchmark/benchmark.log") -> loggi
         train_logger = logging.getLogger("train")
         train_logger.setLevel(logging.DEBUG)
         train_logger.addHandler(file_handler)
+        train_logger.propagate = False
     except Exception as e:
         print(f"Warning: Could not attach file handler for {log_file}: {e}")
 
@@ -205,8 +207,8 @@ class SpiralPolicy:
         phi_progression = progress * total_rotations * 2.0
         phi = (phi_progression % 2.0) - 1.0
 
-        # Maximize speed convention
-        time_action = -1.0
+        # Pace transfer time (~0.5 TU/step across 30 steps for 2-orbit horizon)
+        time_action = -0.67
 
         self.current_step += 1
         action = np.array([theta, phi, time_action], dtype=np.float32)
@@ -476,6 +478,11 @@ def run_evaluation(
             terminated = False
             truncated = False
             step = 0
+            current_coverage = scalar(
+                info.get("current_coverage"),
+                getattr(env, "current_coverage", 0.0),
+            )
+            cum_dv_ms = 0.0
 
             while not (terminated or truncated):
                 if step >= max_steps:
@@ -589,7 +596,7 @@ def run_evaluation(
                 )
                 logger.info(
                     f"  [{policy_name:<8}] {split_name:<5} | Model: {model_name:<22} "
-                    f"| Final Cov: {current_coverage * 100.0:6.2f}% | dV: {cum_dv:6.2f} m/s "
+                    f"| Final Cov: {current_coverage * 100.0:6.2f}% | dV: {cum_dv_ms:6.2f} m/s "
                     f"| Steps: {step:2d}/{max_steps}{coll_str}"
                 )
 

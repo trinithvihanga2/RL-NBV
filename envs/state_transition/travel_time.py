@@ -28,6 +28,7 @@ class TargetOrbitConfig:
         num_orbits: float = 2.0,
         min_transfer_time: float = 1e-6,
         unit_scale: float = 1.0,
+        max_transfer_time: float = 2.0,
     ):
         """
         Initialize target orbit configuration.
@@ -41,12 +42,16 @@ class TargetOrbitConfig:
                        Default: 1.0.
             num_orbits: Number of complete orbits for mission horizon.
                        Default: 2.0.
+            min_transfer_time: Minimum single-step transfer duration (TU).
+            unit_scale: Physical length scale factor (m per canonical length unit).
+            max_transfer_time: Maximum single-step transfer duration (TU).
         """
         self.orbit_radius = orbit_radius
         self.grav_param = grav_param
         self.num_orbits = num_orbits
         self.min_transfer_time = min_transfer_time
         self.unit_scale = unit_scale
+        self.max_transfer_time = max(float(max_transfer_time), float(min_transfer_time))
 
         # Mean motion (angular velocity of circular orbit)
         # n = sqrt(grav_param / orbit_radius^3)

@@ -24,7 +24,8 @@ environment:
     orbit_radius: 1.12
     grav_param: 1.0
     num_orbits: 2.0
-    min_transfer_time: 0.1
+    min_transfer_time: 0.2
+    max_transfer_time: 2.0
     unit_scale: 6.25
   scp_planner:
     koz_radius: 0.95
@@ -35,7 +36,7 @@ environment:
   state_reward:
     revisit_penalty: -5.0
     coverage_coeff: 1.0
-    good_coverage_threshold: 0.1
+    good_coverage_threshold: 0.0
     near_distance_threshold: 0.2
   is_vec_env: 1
   env_num: 8
@@ -56,7 +57,7 @@ training:
   ppo:
     learning_rate: 0.0003
     n_steps: 2048
-    batch_size: 128
+    batch_size: 256
     n_epochs: 10
     gamma: 0.99
     gae_lambda: 0.95
