@@ -107,10 +107,12 @@ def config_to_args(config):
         "cur_coverage_ratio": env.get("cur_coverage_ratio", 1.0),
         "time_cost_weight": env.get("time_cost_weight", 1.0),
         "delta_v_weight": env.get("delta_v_weight", 1.0),
+        "reward_scale": env.get("reward_scale", 0.01),
         "fuel_budget": env.get("fuel_budget", 100.0),
         "target_orbit_config": env.get("target_orbit", {}),
         "state_reward_config": env.get("state_reward", {}),
         "scp_planner_config": env.get("scp_planner", {}),
+        "domain_randomization_config": env.get("domain_randomization", {}),
         "is_vec_env": env.get("is_vec_env", 0),
         "env_num": env.get("env_num", 8),
         "sun_position_config": env.get("sun_position", {}),
@@ -361,6 +363,8 @@ def make_env(data_path, env_id, logger_name, log_file, args):
             target_orbit_config=args.target_orbit_config,
             state_reward_config=args.state_reward_config,
             scp_planner_config=args.scp_planner_config,
+            domain_randomization_config=args.domain_randomization_config,
+            reward_scale=args.reward_scale,
         )
         return env
 
@@ -613,6 +617,8 @@ if __name__ == "__main__":
             target_orbit_config=args.target_orbit_config,
             state_reward_config=args.state_reward_config,
             scp_planner_config=args.scp_planner_config,
+            domain_randomization_config=args.domain_randomization_config,
+            reward_scale=args.reward_scale,
         )
 
     verify_env = create_nbv_env(
@@ -634,6 +640,8 @@ if __name__ == "__main__":
         target_orbit_config=args.target_orbit_config,
         state_reward_config=args.state_reward_config,
         scp_planner_config=args.scp_planner_config,
+        domain_randomization_config={"enabled": False},
+        reward_scale=args.reward_scale,
     )
     test_env = create_nbv_env(
         logger.getChild("test_env"),
@@ -654,6 +662,8 @@ if __name__ == "__main__":
         target_orbit_config=args.target_orbit_config,
         state_reward_config=args.state_reward_config,
         scp_planner_config=args.scp_planner_config,
+        domain_randomization_config={"enabled": False},
+        reward_scale=args.reward_scale,
     )
     logger.info("Environments ready ✅")
     log_gpu_memory(logger, tag="[after envs]")

@@ -19,6 +19,7 @@ environment:
   cur_coverage_ratio: 1.0
   time_cost_weight: 0.2
   delta_v_weight: 0.2
+  reward_scale: 0.01
   fuel_budget: 76504.0 # 100 m/s translated to m/TU (100 * 765.04)
   target_orbit:
     orbit_radius: 1.12
@@ -34,10 +35,20 @@ environment:
     max_iter: 20
     solver: "ECOS"
   state_reward:
-    revisit_penalty: -5.0
+    revisit_penalty: -15.0
     coverage_coeff: 1.0
     good_coverage_threshold: 0.0
-    near_distance_threshold: 0.2
+    near_distance_threshold: 0.28
+    polar_diversity_bonus: 8.0
+  domain_randomization:
+    enabled: true
+    fuel_budget_range_tu: [153.008, 1530.08]
+    nominal_fuel_prob: 0.2
+    horizon_choices: [[10, 2.0], [20, 2.0], [30, 2.0], [40, 3.5], [50, 5.0]]
+    horizon_probs: [0.15, 0.15, 0.40, 0.15, 0.15]
+    sun_inclination_max_deg: 35.0
+    sun_zero_inclination_prob: 0.3
+    randomize_sun_phase: true
   is_vec_env: 1
   env_num: 8
   sun_position:
@@ -65,7 +76,7 @@ training:
     ent_coef: 0.02
     vf_coef: 0.5
     max_grad_norm: 0.5
-    total_steps: 1000000
+    total_steps: 1500000
 
   # Pretrained PointNet
   pretrained:
@@ -78,8 +89,8 @@ training:
     output_file: ./artefacts/train/train_result.txt
     checkpoint_path: ./artefacts/train/checkpoints
     final_model_path: ./artefacts/train/final
-    save_freq: 10000
-    eval_freq: 10000
+    save_freq: 25000
+    eval_freq: 25000
     is_save_model: 1
 
   # Logging

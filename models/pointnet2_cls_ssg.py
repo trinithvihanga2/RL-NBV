@@ -120,10 +120,11 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
     """
     Feature extractor for continuous-action PPO.
     Drops view_state (33-dim), adds camera_pos (3), sun_direction (3), coverage (1),
-    fuel_remaining (1), time_remaining (1) → 9 scalars total.
+    fuel_remaining (1), time_remaining (1), steps_remaining (1),
+    visited_directions (6) → 16 scalars total.
     PointNet FC head outputs 64 dims and scalar MLP outputs 64 dims; concat → 128 total.
     """
-    SCALAR_DIM = 9  # camera_pos(3) + sun_direction(3) + coverage(1) + fuel(1) + time(1)
+    SCALAR_DIM = 16  # camera_pos(3) + sun_direction(3) + coverage(1) + fuel(1) + time(1) + steps(1) + visited_dirs(6)
 
     def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 128):
         super().__init__(observation_space, features_dim)
@@ -171,9 +172,13 @@ class PointNetFeatureExtractionContinuous(BaseFeaturesExtractor):
         cov = observations["coverage"]                     # (B, 1)
         fuel = observations["fuel_remaining"]              # (B, 1)
         time_ = observations["time_remaining"]             # (B, 1)
+        steps_ = observations["steps_remaining"]           # (B, 1)
+        visited = observations["visited_directions"]       # (B, 6)
 
-        scalars = torch.cat([cam, sun, cov, fuel, time_], dim=1)  # (B, 9)
-        scalar_feat = self.scalar_mlp(scalars)                    # (B, 64)
+        scalars = torch.cat(
+            [cam, sun, cov, fuel, time_, steps_, visited], dim=1
+        )  # (B, 16)
+        scalar_feat = self.scalar_mlp(scalars)             # (B, 64)
 
         B, _, _ = xyz.shape
         norm = None

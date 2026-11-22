@@ -92,6 +92,8 @@ def calculate_sun_position(
             - angular_velocity_rad_per_s (float, >= 0) OR period_s (float, > 0)
             - initial_phase_rad (float, default 0)
             - time_offset_s (float, default 0)
+            - inclination_rad (float, default 0)
+            - ascending_node_rad (float, default 0)
 
     Returns:
         np.ndarray: Unit vector with shape (3,) in the Hill frame.
@@ -112,11 +114,33 @@ def calculate_sun_position(
         "orbital_params['initial_phase_rad']",
         orbital_params.get("initial_phase_rad", 0.0),
     )
+    inclination = _as_finite_scalar(
+        "orbital_params['inclination_rad']",
+        orbital_params.get("inclination_rad", 0.0),
+    )
+    asc_node = _as_finite_scalar(
+        "orbital_params['ascending_node_rad']",
+        orbital_params.get("ascending_node_rad", 0.0),
+    )
 
-    # Screenshot model: theta(t + dt) = theta(t) - n * dt.
+    # Rotate in orbital plane then incline about x-axis and rotate node about z-axis.
     theta = theta0 - omega * (t - t0)
+    x_orb = math.cos(theta)
+    y_orb = math.sin(theta)
+    x_inc = x_orb
+    y_inc = y_orb * math.cos(inclination)
+    z_inc = y_orb * math.sin(inclination)
+    cos_o = math.cos(asc_node)
+    sin_o = math.sin(asc_node)
 
-    direction = np.array([math.cos(theta), math.sin(theta), 0.0], dtype=float)
+    direction = np.array(
+        [
+            x_inc * cos_o - y_inc * sin_o,
+            x_inc * sin_o + y_inc * cos_o,
+            z_inc,
+        ],
+        dtype=float,
+    )
     norm = float(np.linalg.norm(direction))
     if norm == 0.0:
         raise ValueError(

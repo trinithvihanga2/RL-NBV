@@ -181,12 +181,12 @@ class CostAwareGreedyNBVPolicy:
         current_time = getattr(self.env, "current_time", 0.0)
         
         # Duration candidate grid (feasible multi-node transfers N >= 2)
-        tau_candidates = [0.8, 1.2, 1.6, 2.0]
+        tau_candidates = [0.4, 0.6, 1.0, 1.5]
         r0 = cam_pos * self.env.orbit_config.unit_scale
         
         best_utility = -float("inf")
         best_view = self.candidate_views[0]
-        best_tau = 1.2
+        best_tau = 0.6
         
         for cand_pos in self.candidate_views:
             rf = cand_pos * self.env.orbit_config.unit_scale

@@ -268,6 +268,8 @@ def create_env(
         "target_orbit_config": target_orbit_cfg,
         "state_reward_config": env_config.get("state_reward", {}),
         "scp_planner_config": scp_planner_cfg,
+        "domain_randomization_config": {"enabled": False},
+        "reward_scale": float(env_config.get("reward_scale", 0.01)),
     }
     if logger is not None:
         env_kwargs["logger"] = logger

@@ -57,6 +57,8 @@ class PointCloudNextBestViewEnv(gym.Env):
         target_orbit_config=None,
         state_reward_config=None,
         scp_planner_config=None,
+        domain_randomization_config=None,
+        reward_scale=0.01,
     ):
         """
         Initialize Point Cloud Next Best View Environment.
@@ -75,9 +77,16 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.cur_coverage_ratio = cur_coverage_ratio
         self.time_cost_weight = time_cost_weight
         self.delta_v_weight = delta_v_weight
+        self.reward_scale = float(reward_scale)
+        self.domain_randomization_config = (
+            dict(domain_randomization_config)
+            if isinstance(domain_randomization_config, Mapping)
+            else {}
+        )
         self.collision_penalty_weight = collision_penalty_weight
         self.collision_check_samples = max(int(collision_check_samples), 2)
-        self.fuel_budget = fuel_budget
+        self.fuel_budget = float(fuel_budget)
+        self._base_fuel_budget = float(fuel_budget)
         self.cumulative_dv = 0.0
         self.sun_position_config = sun_position_config or {}
         self.terminated_coverage = terminated_coverage
@@ -97,7 +106,8 @@ class PointCloudNextBestViewEnv(gym.Env):
             real_data_path, self.logger
         )
 
-        self.max_step = max_step
+        self.max_step = int(max_step)
+        self._base_max_step = int(max_step)
         self.action_history = []
 
         # Initialize orbital configuration for travel time calculations
@@ -114,6 +124,7 @@ class PointCloudNextBestViewEnv(gym.Env):
             unit_scale=float(target_orbit_config.get("unit_scale", 1.0)),
             max_transfer_time=float(target_orbit_config.get("max_transfer_time", 2.0)),
         )
+        self._base_num_orbits = float(self.orbit_config.num_orbits)
 
         self.current_position = random_position_on_sphere(self.orbit_config.orbit_radius)
         self.current_points_cloud = np.zeros((0, 3), dtype=np.float32)
@@ -156,6 +167,12 @@ class PointCloudNextBestViewEnv(gym.Env):
                 "time_remaining": spaces.Box(
                     low=-1.0, high=1.0, shape=(1,), dtype=np.float32
                 ),
+                "steps_remaining": spaces.Box(
+                    low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+                ),
+                "visited_directions": spaces.Box(
+                    low=-1.0, high=1.0, shape=(6,), dtype=np.float32
+                ),
             }
         )
         self.current_coverage = 0.0
@@ -167,10 +184,11 @@ class PointCloudNextBestViewEnv(gym.Env):
         if not isinstance(state_reward_config, Mapping):
             raise TypeError("state_reward_config must be a mapping")
         self.reward_config = {
-            "revisit_penalty": -5.0,
+            "revisit_penalty": -15.0,
             "coverage_coeff": 1.0,
             "good_coverage_threshold": 0.0,
-            "near_distance_threshold": 0.2,
+            "near_distance_threshold": 0.28,
+            "polar_diversity_bonus": 8.0,
         }
         self.reward_config.update(dict(state_reward_config))
 
@@ -231,9 +249,10 @@ class PointCloudNextBestViewEnv(gym.Env):
                 )
             )
 
-        self.sun_orbital_params = self.sun_position_config.get("orbital_params", {})
+        self.sun_orbital_params = dict(self.sun_position_config.get("orbital_params", {}))
         if not self.sun_orbital_params:
             self.sun_orbital_params = {"angular_velocity_rad_per_s": 0.0}
+        self._base_sun_orbital_params = dict(self.sun_orbital_params)
 
         self.current_sun_position = self.initial_sun_position.astype(float)
         self.logger.debug(
@@ -250,6 +269,91 @@ class PointCloudNextBestViewEnv(gym.Env):
         self._initialize_state_transition_for_current_model()
         self._initialize_initial_view()
         self.current_points_cloud_from_gt = np.zeros((0, 3), dtype=np.float32)
+
+    def _apply_domain_randomization(self):
+        dr = self.domain_randomization_config
+        if not bool(dr.get("enabled", False)):
+            self.fuel_budget = self._base_fuel_budget
+            self.max_step = self._base_max_step
+            self.orbit_config.num_orbits = self._base_num_orbits
+            self.orbit_config.total_time = (
+                self.orbit_config.num_orbits * self.orbit_config.orbital_period
+            )
+            self.orbit_config.angular_velocity = (
+                2.0 * np.pi / self.orbit_config.total_time
+            )
+            self.sun_orbital_params = dict(self._base_sun_orbital_params)
+            return
+
+        # 1. Fuel budget randomization
+        nominal_fuel_prob = float(dr.get("nominal_fuel_prob", 0.2))
+        if np.random.random() < nominal_fuel_prob:
+            self.fuel_budget = self._base_fuel_budget
+        else:
+            fuel_range = dr.get("fuel_budget_range_tu", [153.008, 1530.08])
+            lo = max(float(fuel_range[0]), 1e-6)
+            hi = max(float(fuel_range[1]), lo)
+            self.fuel_budget = float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
+
+        # 2. Step horizon & orbital period randomization
+        horizon_choices = dr.get(
+            "horizon_choices",
+            [[10, 2.0], [20, 2.0], [30, 2.0], [40, 3.5], [50, 5.0]],
+        )
+        if horizon_choices:
+            raw_probs = dr.get("horizon_probs", None)
+            if raw_probs is not None and len(raw_probs) == len(horizon_choices):
+                probs = np.asarray(raw_probs, dtype=np.float64)
+                prob_sum = float(np.sum(probs))
+                if prob_sum > 0.0:
+                    probs = probs / prob_sum
+                else:
+                    probs = np.ones(len(horizon_choices), dtype=np.float64) / len(horizon_choices)
+            elif raw_probs is None and len(horizon_choices) == 5:
+                probs = np.asarray([0.15, 0.15, 0.40, 0.15, 0.15], dtype=np.float64)
+                probs = probs / np.sum(probs)
+            else:
+                probs = np.ones(len(horizon_choices), dtype=np.float64) / len(horizon_choices)
+
+            choice_idx = int(np.random.choice(len(horizon_choices), p=probs))
+            chosen_max_step, chosen_num_orbits = horizon_choices[choice_idx]
+            self.max_step = int(chosen_max_step)
+            self.orbit_config.num_orbits = float(chosen_num_orbits)
+            self.orbit_config.total_time = (
+                self.orbit_config.num_orbits * self.orbit_config.orbital_period
+            )
+            self.orbit_config.angular_velocity = (
+                2.0 * np.pi / self.orbit_config.total_time
+            )
+
+        # 3. Sun inclination, ascending node, and initial phase randomization
+        sun_params = dict(self._base_sun_orbital_params)
+        sun_zero_incl_prob = float(dr.get("sun_zero_inclination_prob", 0.3))
+        if np.random.random() < sun_zero_incl_prob:
+            sun_params["inclination_rad"] = 0.0
+            sun_params["ascending_node_rad"] = 0.0
+        else:
+            max_inc_deg = float(dr.get("sun_inclination_max_deg", 35.0))
+            max_inc_rad = float(np.deg2rad(abs(max_inc_deg)))
+            sun_params["inclination_rad"] = float(
+                np.random.uniform(-max_inc_rad, max_inc_rad)
+            )
+            sun_params["ascending_node_rad"] = float(
+                np.random.uniform(0.0, 2.0 * np.pi)
+            )
+        if bool(dr.get("randomize_sun_phase", True)):
+            sun_params["initial_phase_rad"] = float(
+                np.random.uniform(0.0, 2.0 * np.pi)
+            )
+        self.sun_orbital_params = sun_params
+
+        self.logger.debug(
+            "[DR] fuel_budget=%.2f max_step=%d num_orbits=%.2f sun_params=%s",
+            self.fuel_budget,
+            self.max_step,
+            self.orbit_config.num_orbits,
+            self.sun_orbital_params,
+        )
 
     def _accumulate_point_cloud(self, new_view_points: np.ndarray, voxel_size: float = 0.025):
         if new_view_points is None or new_view_points.shape[0] == 0:
@@ -406,6 +510,7 @@ class PointCloudNextBestViewEnv(gym.Env):
                 time_cost_weight=self.time_cost_weight,
                 delta_v_weight=self.delta_v_weight,
             )
+            reward = float(reward * self.reward_scale)
             self.logger.debug(
                 f"[REWARD] coverage_gain=0.0, travel_time={travel_time:7.4f}, "
                 f"delta_v={delta_v:7.4f}, collision_penalty={collision_penalty:7.4f}, final={reward:7.4f}"
@@ -477,8 +582,10 @@ class PointCloudNextBestViewEnv(gym.Env):
         if len(self.good_positions) > 0:
             distances = np.linalg.norm(np.array(self.good_positions) - new_position, axis=1)
             min_dist_to_visited = float(np.min(distances))
-            if min_dist_to_visited < self.reward_config.get("near_distance_threshold", 0.2):
-                revisit_penalty_val = self.reward_config.get("revisit_penalty", -5.0)
+            if min_dist_to_visited < self.reward_config.get("near_distance_threshold", 0.28):
+                revisit_penalty_val = float(self.reward_config.get("revisit_penalty", -15.0))
+                if revisit_penalty_val < 0.0 and coverage_gain < 0.005:
+                    revisit_penalty_val *= 1.5
                 self.logger.debug(f"[REVISIT] Near a visited position! Penalty: {revisit_penalty_val}")
 
         # Remember visited position to prevent stationary hovering (avoid exact duplicates)
@@ -516,22 +623,36 @@ class PointCloudNextBestViewEnv(gym.Env):
             time_cost_weight=self.time_cost_weight,
             delta_v_weight=self.delta_v_weight,
         )
-        
-        # Apply revisit penalty if applicable (revisit_penalty_val is typically negative)
-        reward += revisit_penalty_val
-        
-        self.logger.debug(
-            f"[REWARD] coverage_gain={coverage_gain:7.4f}, travel_time={travel_time:7.4f}, "
-            f"delta_v={delta_v:7.4f}, revisit={revisit_penalty_val}, final={reward:7.4f}"
-        )
+
+        # Strictly gated polar diversity bonus
+        polar_coeff = float(self.reward_config.get("polar_diversity_bonus", 8.0))
+        abs_z_frac = abs(float(new_position[2])) / max(float(r), 1e-8)
+        if (
+            polar_coeff > 0.0
+            and revisit_penalty_val == 0.0
+            and coverage_gain >= 0.002
+            and abs_z_frac > 0.35
+        ):
+            polar_bonus_val = polar_coeff * abs_z_frac
+        else:
+            polar_bonus_val = 0.0
+
+        # Apply revisit penalty and polar diversity bonus
+        reward += revisit_penalty_val + polar_bonus_val
 
         # 8. Check termination using _get_terminated for consistency
         terminated = self._get_terminated()
-        
+
         # 9. Add completion bonus if the episode successfully terminated via coverage
         if terminated and self.current_coverage >= self.terminated_coverage:
             reward += 100.0
             self.logger.debug("[REWARD] Added +100.0 completion bonus!")
+
+        reward = float(reward * self.reward_scale)
+        self.logger.debug(
+            f"[REWARD] coverage_gain={coverage_gain:7.4f}, travel_time={travel_time:7.4f}, "
+            f"delta_v={delta_v:7.4f}, revisit={revisit_penalty_val}, polar={polar_bonus_val:6.3f}, final={reward:7.4f}"
+        )
 
         observation = self._get_observation_space()
         info = self._get_info(
@@ -561,6 +682,9 @@ class PointCloudNextBestViewEnv(gym.Env):
         self.good_positions.clear()
         self.step_cnt = 1
         self.model_name = self.shapenet_reader.get_model_info()
+
+        # Apply domain randomization (or restore base parameters if disabled)
+        self._apply_domain_randomization()
 
         # Reset mission time and fuel
         self.current_time = 0.0
@@ -677,6 +801,36 @@ class PointCloudNextBestViewEnv(gym.Env):
         else:
             sun_dir = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
+        steps_left_frac = float(
+            np.clip(
+                float(self.max_step - (self.step_cnt - 1)) / max(float(self.max_step), 1.0),
+                0.0,
+                1.0,
+            )
+        )
+        steps_remaining = np.array([steps_left_frac * 2.0 - 1.0], dtype=np.float32)
+
+        if len(self.good_positions) > 0:
+            pos_arr = np.asarray(self.good_positions, dtype=np.float32)
+            norms = np.linalg.norm(pos_arr, axis=1, keepdims=True)
+            unit_pos = pos_arr / np.maximum(norms, 1e-8)
+            counts = np.array(
+                [
+                    np.sum(np.maximum(0.0, unit_pos[:, 0])),
+                    np.sum(np.maximum(0.0, -unit_pos[:, 0])),
+                    np.sum(np.maximum(0.0, unit_pos[:, 1])),
+                    np.sum(np.maximum(0.0, -unit_pos[:, 1])),
+                    np.sum(np.maximum(0.0, unit_pos[:, 2])),
+                    np.sum(np.maximum(0.0, -unit_pos[:, 2])),
+                ],
+                dtype=np.float32,
+            )
+            visited_directions = np.clip(
+                np.tanh(counts / 3.0) * 2.0 - 1.0, -1.0, 1.0
+            ).astype(np.float32)
+        else:
+            visited_directions = np.full(6, -1.0, dtype=np.float32)
+
         return {
             "current_point_cloud": cur_pc.astype(np.float32),
             "camera_position": self.current_position.astype(np.float32),
@@ -693,6 +847,8 @@ class PointCloudNextBestViewEnv(gym.Env):
                 ],
                 dtype=np.float32,
             ),
+            "steps_remaining": steps_remaining,
+            "visited_directions": visited_directions,
         }
 
     def _get_terminated(self):
