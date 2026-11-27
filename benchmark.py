@@ -184,28 +184,61 @@ def inspect_and_log_model(
 
 
 class SpiralPolicy:
-    """Heuristic baseline that scans the object using a spiral trajectory."""
+    """Heuristic baseline scanning from the initial camera direction to its antipode along a 3-revolution spiral."""
 
     def __init__(self, steps_per_episode: int):
         self.steps = max(1, int(steps_per_episode))
         self.current_step = 0
+        self._basis: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
 
     def reset(self) -> None:
         self.current_step = 0
+        self._basis = None
+
+    def _build_basis_from_obs(self, obs: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Build a right-handed orthonormal frame (e1, e2, e3) with e3 along the initial camera position."""
+        e3 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if isinstance(obs, dict) and "camera_position" in obs and obs["camera_position"] is not None:
+            vec = np.asarray(obs["camera_position"], dtype=np.float64).reshape(-1)
+            if vec.size >= 3 and np.all(np.isfinite(vec[:3])):
+                norm = float(np.linalg.norm(vec[:3]))
+                if norm > 1e-8:
+                    e3 = vec[:3] / norm
+
+        # Avoid near-collinearity when e3 aligns with the global Z-axis.
+        ref = (
+            np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if abs(e3[2]) < 0.9
+            else np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        )
+        e1 = np.cross(ref, e3)
+        e1 = e1 / np.linalg.norm(e1)
+        e2 = np.cross(e3, e1)
+        return (e1, e2, e3)
 
     def predict(self, obs: Any, deterministic: bool = True):
-        del obs, deterministic
+        del deterministic
 
-        denominator = max(1, self.steps - 1)
-        progress = self.current_step / denominator
+        if self._basis is None:
+            self._basis = self._build_basis_from_obs(obs)
 
-        # Sweep polar angle from north to south
-        theta = -1.0 + 2.0 * progress
-
-        # Complete three azimuth rotations during the episode
+        # Advance from step 1 so the first action leaves the initial pole rather than duplicating it.
+        progress = min(1.0, float(self.current_step + 1) / float(self.steps))
+        alpha = np.pi * progress
         total_rotations = 3
-        phi_progression = progress * total_rotations * 2.0
-        phi = (phi_progression % 2.0) - 1.0
+        beta = 2.0 * np.pi * total_rotations * progress
+
+        e1, e2, e3 = self._basis
+        target_dir = np.cos(alpha) * e3 + np.sin(alpha) * (
+            np.cos(beta) * e1 + np.sin(beta) * e2
+        )
+        target_dir = target_dir / max(float(np.linalg.norm(target_dir)), 1e-12)
+
+        # Map unit target direction to normalized environment spherical action [-1, 1].
+        theta_rad = float(np.arccos(np.clip(target_dir[2], -1.0, 1.0)))
+        theta = float(np.clip((theta_rad / (np.pi / 2.0)) - 1.0, -1.0, 1.0))
+        phi_rad = float(np.arctan2(target_dir[1], target_dir[0]) % (2.0 * np.pi))
+        phi = float(np.clip((phi_rad / np.pi) - 1.0, -1.0, 1.0))
 
         # Pace transfer time (~0.5 TU/step across 30 steps for 2-orbit horizon)
         time_action = -0.67
