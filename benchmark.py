@@ -344,17 +344,175 @@ def scalar(value: Any, default: float = 0.0) -> float:
     return float(array.reshape(-1)[0])
 
 
+def get_orbit_attr(env: PointCloudNextBestViewEnv, attr: str, default: float) -> float:
+    """Read a numeric attribute from env.orbit_config whether object- or dict-based."""
+    orbit_config = getattr(env, "orbit_config", None)
+    if orbit_config is None:
+        return float(default)
+    if isinstance(orbit_config, dict):
+        return float(orbit_config.get(attr, default))
+    return float(getattr(orbit_config, attr, default))
+
+
 def get_total_time(env: PointCloudNextBestViewEnv) -> float:
     """Read total mission time from either an object-style or dict config."""
-    orbit_config = getattr(env, "orbit_config", None)
+    return get_orbit_attr(env, "total_time", 0.0)
 
-    if orbit_config is None:
-        return 0.0
 
-    if isinstance(orbit_config, dict):
-        return float(orbit_config.get("total_time", 0.0))
+def filter_ppo_action_with_scvx(
+    env: PointCloudNextBestViewEnv, raw_action: np.ndarray
+) -> tuple[np.ndarray, int, bool]:
+    """Verify a PPO action against CW/SCvx feasibility and KOZ/mesh clearance, searching safe fallbacks if needed."""
+    base_action = np.clip(normalise_action(raw_action)[:3], -1.0, 1.0).astype(np.float32)
 
-    return float(getattr(orbit_config, "total_time", 0.0))
+    cw = getattr(env, "cw", None)
+    renderer = getattr(env, "renderer", None)
+    if cw is None or renderer is None:
+        return base_action, 0, False
+
+    norm_theta = float(base_action[0])
+    norm_phi = float(base_action[1])
+    norm_time = float(base_action[2])
+
+    r = get_orbit_attr(env, "orbit_radius", 1.0)
+    t_min = get_orbit_attr(env, "min_transfer_time", 0.2)
+    t_max = get_orbit_attr(env, "max_transfer_time", 2.0)
+    unit_scale = get_orbit_attr(env, "unit_scale", 1.0)
+    current_time = float(getattr(env, "current_time", 0.0))
+    remaining_time = max(0.0, get_total_time(env) - current_time)
+
+    current_position = np.asarray(
+        getattr(env, "current_position", np.array([r, 0.0, 0.0], dtype=np.float32)),
+        dtype=np.float32,
+    ).reshape(3)
+    r0 = current_position * unit_scale
+
+    def _evaluate(cand_action: np.ndarray) -> tuple[bool, bool, float, np.ndarray]:
+        c_theta = float(np.clip(cand_action[0], -1.0, 1.0))
+        c_phi = float(np.clip(cand_action[1], -1.0, 1.0))
+        c_time = float(np.clip(cand_action[2], -1.0, 1.0))
+
+        theta = (c_theta + 1.0) * (np.pi / 2.0)
+        phi = (c_phi + 1.0) * np.pi
+        requested_time = t_min + 0.5 * (c_time + 1.0) * (t_max - t_min)
+
+        if remaining_time <= 0.0:
+            travel_time = 0.0
+        else:
+            upper_bound = max(t_min, remaining_time)
+            travel_time = float(np.clip(requested_time, t_min, upper_bound))
+
+        new_position = np.array(
+            [
+                r * np.sin(theta) * np.cos(phi),
+                r * np.sin(theta) * np.sin(phi),
+                r * np.cos(theta),
+            ],
+            dtype=np.float32,
+        )
+        rf = new_position * unit_scale
+        delta_v, _, _ = cw.compute_delta_v(r0, rf, travel_time)
+
+        traj_canonical = (
+            cw.last_trajectory / unit_scale
+            if (hasattr(cw, "last_trajectory") and cw.last_trajectory is not None)
+            else None
+        )
+        collision_detected, _, min_clearance = renderer.check_transfer_collision(
+            current_position, new_position, travel_time, trajectory=traj_canonical
+        )
+        feasible = bool(np.isfinite(delta_v) and delta_v < np.inf)
+        clearance_val = (
+            float(min_clearance)
+            if (min_clearance is not None and np.isfinite(min_clearance))
+            else -float("inf")
+        )
+        return (feasible and not bool(collision_detected)), feasible, clearance_val, new_position
+
+    scvx_calls = 1
+    is_safe, base_feasible, base_clearance, base_new_position = _evaluate(base_action)
+    if is_safe:
+        return base_action, scvx_calls, False
+
+    candidates: list[np.ndarray] = []
+    seen: set[tuple[float, float, float]] = {
+        (round(norm_theta, 6), round(norm_phi, 6), round(norm_time, 6))
+    }
+
+    def _add_candidate(c_theta: float, c_phi: float, c_time: float) -> None:
+        c_theta = float(np.clip(c_theta, -1.0, 1.0))
+        if c_phi < -1.0 or c_phi > 1.0:
+            c_phi = float(((c_phi + 1.0) % 2.0) - 1.0)
+        else:
+            c_phi = float(c_phi)
+        c_time = float(np.clip(c_time, -1.0, 1.0))
+        key = (round(c_theta, 6), round(c_phi, 6), round(c_time, 6))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(np.array([c_theta, c_phi, c_time], dtype=np.float32))
+
+    # a) Same (norm_theta, norm_phi) with relaxed transfer times
+    for cand_time in (-0.4, 0.0, 0.5, 1.0):
+        _add_candidate(norm_theta, norm_phi, cand_time)
+
+    # b) Small angular offsets at relaxed transfer times + spherical midpoint direction
+    for d_theta in (-0.25, 0.25, -0.5, 0.5, 0.0):
+        for d_phi in (-0.25, 0.25, -0.5, 0.5, 0.0):
+            if d_theta == 0.0 and d_phi == 0.0:
+                continue
+            for cand_time in (-0.3, 0.2):
+                _add_candidate(norm_theta + d_theta, norm_phi + d_phi, cand_time)
+
+    u0 = current_position.astype(np.float64)
+    u0_norm = float(np.linalg.norm(u0))
+    u0 = u0 / u0_norm if u0_norm > 1e-8 else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+    u1 = base_new_position.astype(np.float64)
+    u1_norm = float(np.linalg.norm(u1))
+    u1 = u1 / u1_norm if u1_norm > 1e-8 else -u0
+
+    mid = u0 + u1
+    mid_norm = float(np.linalg.norm(mid))
+    if mid_norm > 1e-6:
+        mid_dir = mid / mid_norm
+    else:
+        ref = (
+            np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if abs(u0[2]) < 0.9
+            else np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        )
+        mid_dir = np.cross(ref, u0)
+        mid_dir = mid_dir / max(float(np.linalg.norm(mid_dir)), 1e-12)
+
+    mid_theta_rad = float(np.arccos(np.clip(mid_dir[2], -1.0, 1.0)))
+    mid_norm_theta = float(np.clip((mid_theta_rad / (np.pi / 2.0)) - 1.0, -1.0, 1.0))
+    mid_phi_rad = float(np.arctan2(mid_dir[1], mid_dir[0]) % (2.0 * np.pi))
+    mid_norm_phi = float(np.clip((mid_phi_rad / np.pi) - 1.0, -1.0, 1.0))
+    _add_candidate(mid_norm_theta, mid_norm_phi, 0.0)
+
+    best_finite_action: np.ndarray | None = base_action if base_feasible else None
+    best_finite_clearance: float = base_clearance if base_feasible else -float("inf")
+    best_overall_action: np.ndarray = base_action
+    best_overall_clearance: float = base_clearance
+
+    for cand_action in candidates:
+        scvx_calls += 1
+        cand_safe, cand_feasible, cand_clearance, _ = _evaluate(cand_action)
+        if cand_safe:
+            return cand_action, scvx_calls, True
+        if cand_feasible and (
+            best_finite_action is None or cand_clearance > best_finite_clearance
+        ):
+            best_finite_action = cand_action
+            best_finite_clearance = cand_clearance
+        if cand_clearance > best_overall_clearance:
+            best_overall_action = cand_action
+            best_overall_clearance = cand_clearance
+
+    fallback_action = (
+        best_finite_action if best_finite_action is not None else best_overall_action
+    )
+    return fallback_action, scvx_calls, True
 
 
 def get_vector_component(obj: Any, attribute: str, index: int) -> float:
@@ -451,6 +609,10 @@ def initial_record(
         "collision_min_clearance": np.nan,
         "is_terminated": False,
         "is_truncated": False,
+        "policy_predict_ms": 0.0,
+        "decision_latency_ms": 0.0,
+        "scvx_calls": 0,
+        "safety_filter_triggered": False,
     }
 
 
@@ -523,14 +685,48 @@ def run_evaluation(
                 if step >= max_steps:
                     break
 
-                if policy_name == "Random":
-                    action = env.action_space.sample()
-                else:
-                    if policy is None:
-                        raise ValueError(f"Policy object required for {policy_name}.")
-                    action, _ = policy.predict(obs, deterministic=True)
+                scvx_counter = 0
+                safety_filter_triggered = False
+                cw = getattr(env, "cw", None)
+                cw_dict = getattr(cw, "__dict__", None)
+                had_instance_compute_dv = cw is not None and isinstance(cw_dict, dict) and "compute_delta_v" in cw_dict
+                orig_compute_delta_v = getattr(cw, "compute_delta_v", None) if cw is not None else None
 
-                action = normalise_action(action)
+                if cw is not None and callable(orig_compute_delta_v):
+                    def _counted_compute_delta_v(*args: Any, **kwargs: Any) -> Any:
+                        nonlocal scvx_counter
+                        scvx_counter += 1
+                        return orig_compute_delta_v(*args, **kwargs)
+
+                    cw.compute_delta_v = _counted_compute_delta_v
+
+                try:
+                    t_decision_start = time.perf_counter()
+                    t_predict_start = t_decision_start
+                    if policy_name == "Random":
+                        action = env.action_space.sample()
+                    else:
+                        if policy is None:
+                            raise ValueError(f"Policy object required for {policy_name}.")
+                        action, _ = policy.predict(obs, deterministic=True)
+                    t_predict_end = time.perf_counter()
+                    policy_predict_ms = (t_predict_end - t_predict_start) * 1000.0
+
+                    action = normalise_action(action)
+                    if policy_name.startswith("PPO"):
+                        action, _, safety_filter_triggered = filter_ppo_action_with_scvx(
+                            env, action
+                        )
+
+                    t_decision_end = time.perf_counter()
+                    decision_latency_ms = (t_decision_end - t_decision_start) * 1000.0
+                finally:
+                    if cw is not None and callable(orig_compute_delta_v):
+                        if had_instance_compute_dv:
+                            cw.compute_delta_v = orig_compute_delta_v
+                        elif isinstance(cw_dict, dict) and "compute_delta_v" in cw_dict:
+                            delattr(cw, "compute_delta_v")
+
                 previous_coverage = scalar(
                     info.get("current_coverage"),
                     getattr(env, "current_coverage", 0.0),
@@ -620,7 +816,11 @@ def run_evaluation(
                         ),
                         "is_terminated": terminated,
                         "is_truncated": truncated,
-                        }
+                        "policy_predict_ms": float(policy_predict_ms),
+                        "decision_latency_ms": float(decision_latency_ms),
+                        "scvx_calls": int(scvx_counter),
+                        "safety_filter_triggered": bool(safety_filter_triggered),
+                    }
                 )
 
             if logger is not None:
@@ -672,7 +872,7 @@ DEFAULT_PARAMETER_MATRIX = [
         "koz_radius": 0.95,
         "label": "Nominal_100ms_2orb_s30",
     },
-    # ── Step Horizon Sensitivity (10 steps vs 50 steps at nominal 100 m/s) ──
+    # ── Step Horizon Sensitivity (10, 15, and 50 steps at nominal 100 m/s) ──
     {
         "fuel_budget": 100.0,
         "num_orbits": 2.0,
@@ -682,18 +882,39 @@ DEFAULT_PARAMETER_MATRIX = [
     },
     {
         "fuel_budget": 100.0,
+        "num_orbits": 2.0,
+        "max_step": 15,
+        "koz_radius": 0.95,
+        "label": "Horizon_100ms_2orb_s15",
+    },
+    {
+        "fuel_budget": 100.0,
         "num_orbits": 5.0,
         "max_step": 50,
         "koz_radius": 0.95,
         "label": "Horizon_100ms_5orb_s50",
     },
-    # ── Fuel Budget Sweep: [0.1, 0.5, 1.0, 50.0, 100.0] m/s (Steps=30, Orbits=2, KOZ=0.95) ──
+    # ── Fuel Budget Sweep: [0.1, 0.2, 0.3, 0.5, 1.0, 100.0] m/s (Steps=30, Orbits=2, KOZ=0.95) ──
     {
         "fuel_budget": 0.1,
         "num_orbits": 2.0,
         "max_step": 30,
         "koz_radius": 0.95,
         "label": "FuelSweep_0.1ms_2orb_s30",
+    },
+    {
+        "fuel_budget": 0.2,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "FuelSweep_0.2ms_2orb_s30",
+    },
+    {
+        "fuel_budget": 0.3,
+        "num_orbits": 2.0,
+        "max_step": 30,
+        "koz_radius": 0.95,
+        "label": "FuelSweep_0.3ms_2orb_s30",
     },
     {
         "fuel_budget": 0.5,
@@ -708,13 +929,6 @@ DEFAULT_PARAMETER_MATRIX = [
         "max_step": 30,
         "koz_radius": 0.95,
         "label": "FuelSweep_1.0ms_2orb_s30",
-    },
-    {
-        "fuel_budget": 50.0,
-        "num_orbits": 2.0,
-        "max_step": 30,
-        "koz_radius": 0.95,
-        "label": "FuelSweep_50ms_2orb_s30",
     },
     # ── Safety Standoff (KOZ) Sensitivity Matrix at nominal 100 m/s ──
     {
@@ -737,29 +951,110 @@ DEFAULT_PARAMETER_MATRIX = [
 def print_summary_table(
     df: pd.DataFrame, logger: logging.Logger | None = None
 ) -> None:
-    """Print and log a clean ASCII summary table of final coverage across configs and policies."""
+    """Print and log a clean ASCII summary table of coverage, AUC, fuel, steps, collisions, and latency."""
+    header = (
+        f"{'Config Label':<26} | {'Split':<6} | {'Policy':<8} | {'Final Cov (%)':>13} | "
+        f"{'Cov@10 (%)':>10} | {'AUC (%)':>8} | {'Mean dV (m/s)':>13} | {'Avg Steps':>9} | "
+        f"{'St@90%':>7} | {'>=97% (%)':>9} | {'Collisions':>10} | {'Latency (ms)':>12}"
+    )
+    width = len(header)
     lines = [
-        "\n" + "=" * 90,
-        f"{'BENCHMARK EVALUATION SUMMARY':^90}",
-        "=" * 90,
-        f"{'Config Label':<26} | {'Split':<6} | {'Policy':<8} | {'Final Cov (%)':<14} | {'Mean dV (m/s)':<14} | {'Avg Steps':<10}",
-        "-" * 90,
+        "\n" + "=" * width,
+        f"{'BENCHMARK EVALUATION SUMMARY':^{width}}",
+        "=" * width,
+        header,
+        "-" * width,
     ]
 
-    # Calculate final step metrics per episode
+    if df is None or df.empty:
+        lines.append("=" * width + "\n")
+        for line in lines:
+            if logger is not None:
+                logger.info(line)
+            else:
+                print(line)
+        return
+
     episode_keys = [
-        "dataset_split",
-        "policy",
-        "model_checkpoint",
-        "model_name",
-        "loop_id",
-        "config_fuel_budget",
-        "config_num_orbits",
-        "config_max_step",
-        "config_koz_radius",
+        col
+        for col in [
+            "dataset_split",
+            "policy",
+            "model_checkpoint",
+            "model_name",
+            "loop_id",
+            "config_fuel_budget",
+            "config_num_orbits",
+            "config_max_step",
+            "config_koz_radius",
+        ]
+        if col in df.columns
     ]
-    final_steps = df.sort_values("step").groupby(episode_keys, as_index=False).last()
 
+    episode_rows = []
+    for _, ep_df in df.groupby(episode_keys, sort=False):
+        ep_sorted = ep_df.sort_values("step")
+        last_row = ep_sorted.iloc[-1]
+
+        max_s = (
+            int(last_row["config_max_step"])
+            if "config_max_step" in ep_sorted.columns
+            else int(ep_sorted["step"].max())
+        )
+        max_s = max(max_s, int(ep_sorted["step"].max()), 1)
+
+        step_cov_map = {
+            int(s): float(c) * 100.0
+            for s, c in zip(ep_sorted["step"], ep_sorted["coverage"])
+            if 0 <= int(s) <= max_s
+        }
+        ff_cov = np.zeros(max_s + 1, dtype=np.float64)
+        last_cov = 0.0
+        for s_idx in range(max_s + 1):
+            if s_idx in step_cov_map:
+                last_cov = step_cov_map[s_idx]
+            ff_cov[s_idx] = last_cov
+
+        cov_at_10 = float(ff_cov[min(10, max_s)])
+        auc_pct = float(0.5 * (ff_cov[:-1] + ff_cov[1:]).sum() / max(max_s, 1))
+
+        reached_90 = ep_sorted[ep_sorted["coverage"] >= 0.90]
+        steps_to_90 = float(reached_90["step"].iloc[0]) if not reached_90.empty else np.nan
+        hit_97 = 100.0 if float(last_row["coverage"]) >= 0.97 else 0.0
+
+        if "collision_detected" in ep_sorted.columns:
+            col_vals = ep_sorted["collision_detected"].fillna(False)
+            if col_vals.dtype == object:
+                col_vals = (
+                    col_vals.astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .isin({"true", "1", "yes"})
+                )
+            ep_collisions = int(bool(col_vals.astype(bool).any()))
+        else:
+            ep_collisions = 0
+
+        episode_rows.append(
+            {
+                "config_fuel_budget": float(last_row["config_fuel_budget"]),
+                "config_num_orbits": float(last_row["config_num_orbits"]),
+                "config_max_step": int(last_row["config_max_step"]),
+                "config_koz_radius": float(last_row["config_koz_radius"]),
+                "dataset_split": str(last_row["dataset_split"]),
+                "policy": str(last_row["policy"]),
+                "coverage": float(last_row["coverage"]),
+                "cov_at_10": cov_at_10,
+                "auc_pct": auc_pct,
+                "cumulative_dv": float(last_row["cumulative_dv"]),
+                "step": float(last_row["step"]),
+                "steps_to_90": steps_to_90,
+                "hit_97": hit_97,
+                "collisions": ep_collisions,
+            }
+        )
+
+    ep_summary_df = pd.DataFrame(episode_rows)
     group_cols = [
         "config_fuel_budget",
         "config_num_orbits",
@@ -768,21 +1063,61 @@ def print_summary_table(
         "dataset_split",
         "policy",
     ]
-    summary = final_steps.groupby(group_cols, as_index=False).agg({
-        "coverage": "mean",
-        "cumulative_dv": "mean",
-        "step": "mean",
-    })
+    summary = ep_summary_df.groupby(group_cols, as_index=False).agg(
+        {
+            "coverage": "mean",
+            "cov_at_10": "mean",
+            "auc_pct": "mean",
+            "cumulative_dv": "mean",
+            "step": "mean",
+            "steps_to_90": "mean",
+            "hit_97": "mean",
+            "collisions": "sum",
+        }
+    )
+
+    latency_map: dict[tuple[float, float, int, float, str, str], float] = {}
+    if "decision_latency_ms" in df.columns:
+        step_rows = df[df["step"] > 0]
+        if not step_rows.empty:
+            lat_series = step_rows.groupby(group_cols)["decision_latency_ms"].mean()
+            for key_vals, mean_lat in lat_series.items():
+                norm_key = (
+                    float(key_vals[0]),
+                    float(key_vals[1]),
+                    int(key_vals[2]),
+                    float(key_vals[3]),
+                    str(key_vals[4]),
+                    str(key_vals[5]),
+                )
+                latency_map[norm_key] = float(mean_lat) if pd.notna(mean_lat) else 0.0
 
     for _, row in summary.iterrows():
         cfg_name = f"{row['config_fuel_budget']:g}ms_{int(row['config_num_orbits'])}orb_s{int(row['config_max_step'])}_k{row['config_koz_radius']:.2f}"
         cov_pct = row["coverage"] * 100.0
+        cov10_pct = row["cov_at_10"]
+        auc_pct = row["auc_pct"]
         dv_val = row["cumulative_dv"]
         steps_val = row["step"]
-        lines.append(
-            f"{cfg_name:<26} | {row['dataset_split']:<6} | {row['policy']:<8} | {cov_pct:>12.2f}% | {dv_val:>12.2f} | {steps_val:>9.1f}"
+        st90_str = f"{row['steps_to_90']:>7.1f}" if pd.notna(row["steps_to_90"]) else f"{'N/A':>7}"
+        hit97_pct = row["hit_97"]
+        collisions_val = int(row["collisions"])
+        lat_key = (
+            float(row["config_fuel_budget"]),
+            float(row["config_num_orbits"]),
+            int(row["config_max_step"]),
+            float(row["config_koz_radius"]),
+            str(row["dataset_split"]),
+            str(row["policy"]),
         )
-    lines.append("=" * 90 + "\n")
+        latency_val = latency_map.get(lat_key, 0.0)
+        lines.append(
+            f"{cfg_name:<26} | {row['dataset_split']:<6} | {row['policy']:<8} | "
+            f"{cov_pct:>12.2f}% | {cov10_pct:>9.2f}% | {auc_pct:>7.2f}% | "
+            f"{dv_val:>13.2f} | {steps_val:>9.1f} | {st90_str} | {hit97_pct:>8.1f}% | "
+            f"{collisions_val:>10d} | {latency_val:>12.2f}"
+        )
+    lines.append("=" * width + "\n")
 
     for line in lines:
         if logger is not None:
